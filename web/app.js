@@ -1,5 +1,5 @@
 /**
- * Spend, openable.
+ * Real Cost of Agent — the page.
  *
  * The headline number is the top of a tree. Each cut re-splits the same dollars
  * a different way, and the subscription panel answers the question the token
@@ -8,6 +8,17 @@
  * No framework, no build step. The page is one screen with one shape of data,
  * and everything below is plain DOM.
  */
+
+import {
+  FORMATS,
+  MARK_PATHS,
+  cardBlob,
+  paintShareCard,
+  shareFacts,
+  shareTargets,
+  shareText,
+  shareable,
+} from './share.js';
 
 /* ---------------------------------------------------------------- *
  * Formatting
@@ -93,6 +104,13 @@ const ICON_PATHS = {
     '<path d="M20 11a8 8 0 0 0-13.7-5.4L3 9"/><path d="M4 13a8 8 0 0 0 13.7 5.4L21 15"/><path d="M3 4v5h5M21 20v-5h-5"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/>',
+  share: '<path d="M4 13v6a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-6"/><path d="M12 15V3"/><path d="M8 7l4-4 4 4"/>',
+  download:
+    '<path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/><path d="M12 3v12"/><path d="M8 11l4 4 4-4"/>',
+  copy: '<path d="M11 9h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
+  external: '<path d="M14 4h6v6"/><path d="M20 4l-8.5 8.5"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  // The brand mark, so the header, the canvas and the favicon are one drawing.
+  mark: MARK_PATHS.map((d) => `<path d="${d}"/>`).join(''),
 };
 
 function icon(name, size = 16) {
@@ -140,6 +158,13 @@ const state = {
   saving: false,
   saved: false,
   error: null,
+  share: {
+    format: 'landscape',
+    tone: 'short',
+    /** `null` means "whatever the generator produced"; a string means the user edited it. */
+    text: null,
+    status: null,
+  },
 };
 
 const root = document.getElementById('root');
@@ -521,6 +546,311 @@ function whereItWent() {
 }
 
 /* ---------------------------------------------------------------- *
+ * Sharing
+ *
+ * A local page has no audience, and this project only exists because somebody's
+ * number surprised them enough to want to say it out loud.
+ *
+ * Two properties are load-bearing here. **Nothing is posted by anything on this
+ * panel** — each platform link opens that platform's own composer with the text
+ * already in it, and a person still has to press post. And **the box is the
+ * post**: every button sends exactly the characters visible in the textarea, so
+ * there is no second, unedited version of your words going somewhere you cannot
+ * see. What may appear in that box at all is fixed by `shareFacts` in
+ * `share.js`, which is an allowlist of aggregates — a project name, a path or a
+ * session title cannot reach it.
+ * ---------------------------------------------------------------- */
+
+/**
+ * One canvas for the life of the page.
+ *
+ * `render()` replaces `#root` wholesale, and a canvas rebuilt on every
+ * keystroke would repaint a 2400px bitmap to show the same picture.
+ */
+const shareCanvas = h('canvas.share-canvas', {
+  role: 'img',
+  'aria-label': 'Preview of the image that will be shared',
+});
+const shareStatus = h('span.share-status');
+const shareCount = h('span.share-count.faint');
+let shareBox = null;
+let shareTargetEls = [];
+
+function generatedShareText(facts) {
+  return state.share.text ?? shareText(facts, { tone: state.share.tone });
+}
+
+function setShareStatus(message, tone = 'ok') {
+  shareStatus.textContent = message ?? '';
+  shareStatus.className = `share-status ${message ? tone : ''}`.trim();
+}
+
+/**
+ * Re-point the platform links at whatever the box currently says.
+ *
+ * Deliberately not a `render()`: rebuilding the panel on every keystroke would
+ * take the caret out of the textarea the user is typing in.
+ */
+function syncShare() {
+  if (!shareBox) return;
+  const text = shareBox.value;
+  const targets = shareTargets(shareFacts(state.spend), { short: text, long: text });
+  const byId = new Map(targets.map((t) => [t.id, t]));
+  for (const { id, el } of shareTargetEls) {
+    const href = byId.get(id)?.href;
+    if (href) el.href = href;
+  }
+  // A long post is *meant* to be over 280 — LinkedIn, Reddit and an Instagram
+  // caption all want the long one. So the count states the consequence rather
+  // than scolding, and only turns amber when the length contradicts what the
+  // user asked for: a short post that will not fit where short posts go.
+  const n = text.length;
+  shareCount.textContent =
+    n <= 280
+      ? `${n} characters — fits everywhere`
+      : n <= 300
+        ? `${n} characters — over X's limit of 280, fine elsewhere`
+        : `${n} characters — right for LinkedIn, Reddit and Instagram; over the limit on X (280) and Bluesky (300)`;
+  shareCount.classList.toggle('over', n > 280 && state.share.tone === 'short');
+}
+
+/**
+ * Copy, with the pre-clipboard-API fallback still in place.
+ *
+ * `navigator.clipboard` needs a secure context. `127.0.0.1` is one, so the
+ * documented way of running this is fine — but somebody who has bound the
+ * server to a LAN address to read their numbers from a laptop is on plain
+ * http, and losing copy entirely there is a worse outcome than a deprecated
+ * call.
+ */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const box = shareBox;
+    if (!box) throw new Error('clipboard unavailable — select the text and copy it');
+    box.select();
+    if (!document.execCommand?.('copy')) {
+      throw new Error('clipboard unavailable — the text is selected, press copy');
+    }
+    box.setSelectionRange(box.value.length, box.value.length);
+  }
+}
+
+async function copyImage() {
+  const blob = await cardBlob(shareCanvas);
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+    throw new Error('this browser cannot copy images — use Download instead');
+  }
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+}
+
+async function downloadImage() {
+  const blob = await cardBlob(shareCanvas);
+  const url = URL.createObjectURL(blob);
+  const link = h('a', { href: url, download: `real-cost-of-agent-${state.share.format}.png` });
+  link.click();
+  // Safari still wants the object alive while it handles the click.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** Run an action and report the outcome in one place, rather than failing silently. */
+function action(label, iconName, message, fn) {
+  return h(
+    'button.action',
+    {
+      onclick: async () => {
+        try {
+          await fn();
+          setShareStatus(message);
+        } catch (err) {
+          setShareStatus(err.message, 'bad');
+        }
+      },
+    },
+    icon(iconName, 14),
+    label,
+  );
+}
+
+function sharePanel() {
+  if (!shareable(state.spend)) return null;
+
+  const facts = shareFacts(state.spend);
+  const spec = paintShareCard(shareCanvas, facts, { format: state.share.format });
+  shareCanvas.style.aspectRatio = `${spec.w} / ${spec.h}`;
+
+  const formats = h(
+    'div.segmented',
+    {},
+    ...FORMATS.map((f) =>
+      h(
+        'button',
+        {
+          class: f.id === state.share.format ? 'active' : null,
+          title: f.note,
+          onclick: () => {
+            state.share.format = f.id;
+            render();
+          },
+        },
+        f.label,
+      ),
+    ),
+  );
+
+  const tones = h(
+    'div.segmented',
+    {},
+    ...[
+      { id: 'short', label: 'Short', note: 'Fits X and Bluesky.' },
+      { id: 'long', label: 'Long', note: 'For LinkedIn, Reddit and Instagram captions.' },
+    ].map((t) =>
+      h(
+        'button',
+        {
+          class: t.id === state.share.tone ? 'active' : null,
+          title: t.note,
+          onclick: () => {
+            state.share.tone = t.id;
+            // A tone is a starting point, not a filter over the user's words:
+            // switching it rewrites the box, so an edit is never half-applied.
+            state.share.text = null;
+            render();
+          },
+        },
+        t.label,
+      ),
+    ),
+  );
+
+  shareBox = h('textarea.share-box', {
+    rows: state.share.tone === 'long' ? 12 : 7,
+    spellcheck: 'false',
+    'aria-label': 'The post. Edit it — every button below sends exactly this.',
+    oninput: (e) => {
+      state.share.text = e.target.value;
+      syncShare();
+      setShareStatus(null);
+    },
+  });
+  shareBox.value = generatedShareText(facts);
+
+  const targets = shareTargets(facts, { short: shareBox.value, long: shareBox.value });
+  shareTargetEls = [];
+
+  const buttons = targets.map((target) => {
+    const label = h(
+      'span.share-target-label',
+      {},
+      target.label,
+      target.href ? icon('external', 12) : icon('copy', 12),
+    );
+
+    // Facebook takes a URL and nothing else; Instagram has no web composer at
+    // all. Both put the text on the clipboard on the way out, because the
+    // alternative is sending someone to an empty box wondering where it went.
+    const carryTheText = async () => {
+      if (target.prefills) return;
+      await copyText(shareBox.value);
+      setShareStatus(
+        target.id === 'instagram'
+          ? 'Caption copied. Download the image, then paste this when you post it.'
+          : 'Text copied — paste it into the composer that just opened.',
+      );
+    };
+
+    const el = target.href
+      ? h(
+          'a.share-target',
+          {
+            href: target.href,
+            target: '_blank',
+            rel: 'noopener noreferrer',
+            title: target.note ?? `Open the ${target.label} composer with this post in it`,
+            onclick: carryTheText,
+          },
+          label,
+        )
+      : h(
+          'button.share-target',
+          {
+            title: target.note,
+            onclick: () =>
+              carryTheText().catch((err) => setShareStatus(err.message, 'bad')),
+          },
+          label,
+        );
+
+    shareTargetEls.push({ id: target.id, el });
+    return el;
+  });
+
+  const notes = targets.filter((t) => t.note);
+
+  const panel = h(
+    'div.share-body',
+    {},
+    h('div.share-preview', {}, shareCanvas, h('div.share-format-note', {}, spec.note)),
+    h(
+      'div.share-compose',
+      {},
+      h('div.share-controls', {}, formats, tones),
+      shareBox,
+      h('div.share-meta', {}, shareCount),
+      h(
+        'div.share-actions',
+        {},
+        action('Copy text', 'copy', 'Post copied to the clipboard.', () => copyText(shareBox.value)),
+        action('Copy image', 'copy', 'Image copied — paste it straight into a composer.', copyImage),
+        action('Download image', 'download', `Saved as PNG at ${spec.w}×${spec.h}.`, downloadImage),
+        shareStatus,
+      ),
+    ),
+  );
+
+  const platforms = h(
+    'div.share-platforms',
+    {},
+    h('span.share-platforms-label', {}, 'Post to'),
+    ...buttons,
+  );
+
+  const disclosure = h(
+    'div.share-disclosure',
+    {},
+    h('p', {
+      html:
+        '<strong>Nothing is posted by this page.</strong> Each button opens that platform in a new ' +
+        'tab with the text above already in the composer — the post is still yours to make, edit ' +
+        'or abandon. These links are the only thing in this project that points off your machine.',
+    }),
+    h('p', {
+      html:
+        '<strong>What can travel:</strong> the total, your plan’s name, the month count, how many ' +
+        'sessions and projects, and the percentage split. Project names, file paths and session ' +
+        'titles are not in the data this panel is given — that is enforced in ' +
+        '<code>web/share.js</code> and asserted in <code>test/share.test.js</code>.',
+    }),
+    notes.length &&
+      h(
+        'ul.share-notes',
+        {},
+        ...notes.map((t) => h('li', {}, h('strong', {}, `${t.label}: `), t.note)),
+      ),
+  );
+
+  return card(
+    'Share what this found',
+    'The number is more interesting to other people than you think',
+    null,
+    panel,
+    platforms,
+    disclosure,
+  );
+}
+
+/* ---------------------------------------------------------------- *
  * Render
  * ---------------------------------------------------------------- */
 
@@ -548,7 +878,7 @@ function render() {
   const subtitle = document.getElementById('subtitle');
   subtitle.textContent = meta.found
     ? `${plural(meta.sessions, 'session')} across ${plural(meta.workspaces, 'project')} · indexed ${ago(meta.scannedAt)}`
-    : 'What it cost, what you paid, and where it went';
+    : 'What your agent would have cost';
 
   if (!meta.found) {
     root.append(
@@ -572,11 +902,33 @@ function render() {
   const notes = caveats();
   if (notes) root.append(notes);
   root.append(whereItWent());
+
+  const share = sharePanel();
+  if (share) {
+    root.append(share);
+    // The links are built from the box, and the box only exists once it is in
+    // the document — so the first pointing happens here, not inside the panel.
+    syncShare();
+  }
+  shareButton.hidden = !share;
 }
 
 /* ---------------------------------------------------------------- *
  * Chrome
  * ---------------------------------------------------------------- */
+
+/**
+ * The header's share button is a shortcut to the panel, not a second copy of
+ * it. The panel sits at the bottom because this is a tool before it is a
+ * megaphone — but a feature nobody scrolls to may as well not exist.
+ */
+const shareButton = document.getElementById('share');
+shareButton.append(icon('share'));
+shareButton.hidden = true;
+shareButton.addEventListener('click', () => {
+  shareBox?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  shareBox?.focus({ preventScroll: true });
+});
 
 const rescan = document.getElementById('rescan');
 rescan.append(icon('refresh'));
@@ -602,7 +954,7 @@ const paintThemeIcon = () => {
 themeButton.addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = next;
-  localStorage.setItem('agent-spend-theme', next);
+  localStorage.setItem('real-cost-of-agent-theme', next);
   paintThemeIcon();
 });
 paintThemeIcon();

@@ -1,5 +1,5 @@
 /* ============================================================
-   Agent Spend — design tokens
+   Real Cost of Agent — design tokens
 
    Dark by default (a money view is something people leave open),
    with a full light theme behind [data-theme='light'].
@@ -22,6 +22,16 @@
 
   --running: #34d399;
   --running-soft: rgba(52, 211, 153, 0.14);
+
+  /* Not an error — the two things that use it are "this will not fit on X" and
+     "the clipboard refused", both of which are information rather than failure. */
+  --warn: #f0a35e;
+
+  /* The brand ramp: the indigo everything is measured in, running to the green
+     the page already uses for "you did not actually pay this". Cost to value,
+     which is the whole argument the app makes. */
+  --brand-from: #7c87ff;
+  --brand-to: #34d399;
 
   --radius: 12px;
   --radius-sm: 8px;
@@ -48,6 +58,10 @@
 
   --running: #059669;
   --running-soft: rgba(5, 150, 105, 0.12);
+
+  /* The dark theme's amber is 2.1:1 on white — legible on #0a0c11, invisible
+     here. Same signal, darkened until it reads. */
+  --warn: #b45309;
 
   --shadow:
     0 1px 2px rgba(16, 20, 35, 0.05), 0 8px 24px -14px rgba(16, 20, 35, 0.2);
@@ -120,6 +134,12 @@ input {
   align-items: flex-start;
   gap: 12px;
   margin-bottom: 20px;
+}
+
+.brand-mark {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent);
 }
 
 .page-head h1 {
@@ -552,6 +572,237 @@ input {
   color: var(--text);
 }
 
+/* ============================================================
+   Share
+
+   The preview and the words sit side by side because they are one thing: the
+   post is the picture plus the sentence, and editing either without seeing the
+   other is how people end up posting a caption that contradicts their own
+   screenshot.
+   ============================================================ */
+
+.share-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px;
+}
+
+.share-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.share-canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  /* The card is painted on a near-black ground in both themes — it is going to
+     a feed, not to this page — so it needs its own edge in the light theme. */
+  background: #0a0c11;
+}
+
+.share-format-note {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.share-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.share-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.share-controls .segmented {
+  margin-left: 0;
+}
+
+.share-box {
+  width: 100%;
+  flex: 1;
+  min-height: 132px;
+  resize: vertical;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  outline: none;
+}
+
+.share-box:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.share-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+
+/* Over the limit is a warning, not an error: X will refuse it, every other
+   platform here will take it happily. */
+.share-count.over {
+  color: var(--warn);
+}
+
+.share-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 550;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.action:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.share-status {
+  font-size: 11.5px;
+  color: var(--running);
+}
+
+.share-status.bad {
+  color: var(--warn);
+}
+
+/* ---- where a post can go ---- */
+
+.share-platforms {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-hover);
+}
+
+.share-platforms-label {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  margin-right: 2px;
+}
+
+/* Text labels rather than platform logos, and not for want of pixels: a remote
+   logo is a network request this project does not make, and a bundled one is
+   somebody else's trademark shipped under our licence. */
+.share-target {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 550;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+
+.share-target:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.share-target-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.share-target svg {
+  color: var(--text-faint);
+}
+
+.share-target:hover svg {
+  color: inherit;
+}
+
+.share-disclosure {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.share-disclosure p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.share-disclosure strong {
+  color: var(--text);
+}
+
+.share-disclosure code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.share-notes {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.share-notes strong {
+  color: var(--text-muted);
+  font-weight: 550;
+}
+
+@media (max-width: 860px) {
+  /* The preview stops being a companion to the text and becomes a header for
+     it; side by side, both are too narrow to judge. */
+  .share-body {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 640px) {
   .page {
     padding: 16px 12px 48px;
@@ -559,6 +810,10 @@ input {
 
   .segmented {
     width: 100%;
+  }
+
+  .share-controls .segmented {
+    width: auto;
   }
 }
 
