@@ -103,20 +103,34 @@ export function shareFacts(spend) {
   const billing = spend?.billing ?? {};
   const meta = spend?.meta ?? {};
   const total = finite(spend?.total);
-  const subscription = billing.authMode === 'subscription' && billing.plan?.id !== 'none';
-  const paid = subscription ? finite(billing.subscriptionCost) : finite(billing.apiCreditsSpent);
+  const planCost = finite(billing.planCost);
+  const hasPlan = planCost > 0;
   const ratio = finite(billing.ratio);
+  const months = Math.max(1, Math.round(finite(billing.months)) || 1);
 
   return {
     total,
-    subscription,
+    /** There is a plan to compare against. Not "the plan is winning". */
+    hasPlan,
+    /** Authenticating with an API key, so list rates are the actual bill. */
+    metered: billing.metered === true,
     /** A product name, e.g. "Claude Max 20×". Never a project or a path. */
-    planName: subscription ? String(billing.plan?.name ?? '') : null,
-    paid,
-    /** Only meaningful on a subscription, and only when the plan costs something. */
-    ratio: subscription && ratio > 0 ? ratio : null,
-    apiCreditsSpent: finite(billing.apiCreditsSpent),
-    months: Math.max(1, Math.round(finite(billing.months)) || 1),
+    planName: hasPlan ? String(billing.plan?.name ?? '') : null,
+    /** What the plan costs over the months the transcripts span. */
+    planCost,
+    /** What the plan costs per month, which is the figure people actually know. */
+    planMonthly: months > 0 ? planCost / months : 0,
+    /**
+     * Signed, and that is the point. Positive is usage the plan did not charge
+     * for; negative is a plan that cost more than the work was worth. A share
+     * card that can only ever report the first one is an advertisement.
+     */
+    saved: hasPlan ? total - planCost : 0,
+    ratio: hasPlan && ratio > 0 ? ratio : null,
+    /** What this habit runs per month at list rates — the "could I afford it?" number. */
+    perMonth: total / months,
+    verdict: String(billing.verdict ?? 'unknown'),
+    months,
     sessions: Math.max(0, Math.round(finite(meta.sessions))),
     projects: Math.max(0, Math.round(finite(meta.workspaces))),
     split: (spend?.components ?? [])
@@ -134,60 +148,195 @@ export function shareable(spend) {
  * The words
  * ---------------------------------------------------------------- */
 
-/** The clause naming the plan, which is the part that makes the number mean something. */
+/** The clause naming the plan, which is what makes the number mean anything. */
 function planClause(f) {
   const on = f.planName ? ` on ${f.planName}` : '';
-  return `${dollars(f.paid)}${on} over ${plural(f.months, 'month')}`;
+  return `${dollars(f.planCost)}${on} over ${plural(f.months, 'month')}`;
 }
 
-export function headline(f) {
-  if (f.subscription && f.ratio) {
-    return `${f.ratio.toFixed(1)}× — what my Claude Code subscription actually returned.`;
-  }
-  if (f.subscription) {
-    return `My Claude Code subscription covered ${dollars(f.total)} of agent work.`;
-  }
-  if (f.apiCreditsSpent > 0) {
-    return `${dollars(f.total)} of Claude Code, billed straight to API credits.`;
-  }
-  return `${dollars(f.total)} — what my Claude Code sessions would cost at API list rates.`;
+/** The gap, said in whichever direction it actually runs. */
+function gapClause(f) {
+  if (!f.hasPlan) return '';
+  if (f.saved > 0) return `${dollars(f.saved)} of usage I was never billed for`;
+  if (f.saved < 0) return `${dollars(-f.saved)} more than the work was worth`;
+  return 'exactly what it cost';
 }
 
-/** The line under the big number on the image, and the second line of a post. */
-export function subhead(f) {
-  if (f.subscription) {
-    return `${dollars(f.total)} of agent work at API list rates. The plan cost ${planClause(f)}.`;
-  }
-  if (f.apiCreditsSpent > 0) {
-    return `${plural(f.sessions, 'session')} across ${plural(f.projects, 'project')}, priced from the transcripts already on my disk.`;
-  }
-  return `${plural(f.sessions, 'session')} across ${plural(f.projects, 'project')}, priced from the transcripts already on my disk.`;
+const behind = (f) => f.verdict === 'api-ahead';
+
+/**
+ * The angles.
+ *
+ * The same numbers persuade different people for different reasons, and one
+ * post cannot do all of it. Somebody on Max at $200 is asking whether it is
+ * worth it; somebody eyeing the API is asking whether they could afford the
+ * same habit metered; somebody on Pro at $20 mostly enjoys the multiple; and a
+ * technical audience would rather argue about the cache split than hear about
+ * anyone's savings.
+ *
+ * Each angle supplies the words *and* the headline on the card, so picking one
+ * changes both and they cannot drift apart. Every angle names the gap — that is
+ * the number people repeat — and every angle has to survive the gap running the
+ * other way. A card that can only say "my plan is great" is an advertisement,
+ * and it would make the ones that say something true less believable.
+ */
+export const ANGLES = [
+  {
+    id: 'value',
+    label: 'Value',
+    note: 'What every $1 of plan bought. Strongest when the multiple is large.',
+    eyebrow: (f) => (f.hasPlan ? 'WHAT EVERY $1 OF PLAN BOUGHT' : 'CLAUDE CODE, PRICED AT API LIST RATES'),
+    number: (f) => (f.ratio ? `${f.ratio.toFixed(1)}×` : dollars(f.total)),
+    headline: (f) => {
+      if (!f.hasPlan) return `${dollars(f.total)} — what my Claude Code sessions would cost at API list rates.`;
+      if (behind(f)) return `${f.ratio.toFixed(1)}× — my Claude Code plan did not pay for itself.`;
+      return `${f.ratio.toFixed(1)}× — what my Claude Code plan actually returned.`;
+    },
+    caption: (f) => {
+      if (!f.hasPlan) return `${plural(f.sessions, 'session')} across ${plural(f.projects, 'project')}.`;
+      if (behind(f)) {
+        return `${dollars(f.total)} of work at list rates, against ${planClause(f)} — ${gapClause(f)}.`;
+      }
+      return `${dollars(f.total)} at list rates, against ${planClause(f)} — ${gapClause(f)}.`;
+    },
+  },
+  {
+    id: 'saved',
+    label: 'Saved',
+    note: 'Leads with the dollars. The number people repeat.',
+    eyebrow: (f) =>
+      !f.hasPlan
+        ? 'CLAUDE CODE, PRICED AT API LIST RATES'
+        : behind(f)
+          ? 'WHAT THE PLAN COST ABOVE METERED RATES'
+          : 'USAGE BEYOND WHAT THE PLAN COST',
+    number: (f) => (f.hasPlan ? dollars(Math.abs(f.saved)) : dollars(f.total)),
+    headline: (f) => {
+      if (!f.hasPlan) return `${dollars(f.total)} of Claude Code, at API list rates.`;
+      if (behind(f)) return `My Claude Code plan cost ${dollars(-f.saved)} more than the work was worth.`;
+      return `${dollars(f.saved)} of Claude Code I was never billed for.`;
+    },
+    caption: (f) =>
+      f.hasPlan
+        ? `${dollars(f.total)} at API list rates, against ${planClause(f)}.`
+        : `${plural(f.sessions, 'session')} across ${plural(f.projects, 'project')}.`,
+  },
+  {
+    id: 'runrate',
+    label: 'Run rate',
+    note: 'What the habit costs per month, metered. The "could I actually afford this?" angle.',
+    eyebrow: () => 'WHAT THIS HABIT COSTS PER MONTH, METERED',
+    number: (f) => `${dollars(f.perMonth)}/mo`,
+    headline: (f) => {
+      if (!f.hasPlan) return `My Claude Code habit runs ${dollars(f.perMonth)} a month at API list rates.`;
+      if (behind(f)) {
+        return `${dollars(f.perMonth)} a month of Claude Code, on a ${dollars(f.planMonthly)}-a-month plan.`;
+      }
+      return `${dollars(f.perMonth)} a month at API list rates. My plan is ${dollars(f.planMonthly)}.`;
+    },
+    caption: (f) => {
+      if (!f.hasPlan) return `${plural(f.months, 'month')} of transcripts, priced at published rates.`;
+      if (behind(f)) return `Metered would bill me ${dollars(-f.saved / f.months)} a month less at this rate of use.`;
+      return `Against ${dollars(f.planMonthly)}/mo of ${f.planName}. Same work, ${f.ratio.toFixed(1)}× the price.`;
+    },
+  },
+  {
+    id: 'split',
+    label: 'Breakdown',
+    note: 'Where the money actually went. The one a technical audience argues with.',
+    eyebrow: () => 'CLAUDE CODE, PRICED AT API LIST RATES',
+    number: (f) => dollars(f.total),
+    headline: (f) => {
+      const top = f.split[0];
+      if (!top) return `${dollars(f.total)} of Claude Code, priced from my own transcripts.`;
+      return `${dollars(f.total)} of Claude Code — and ${pct(top.share)} of it was ${top.label.toLowerCase()}.`;
+    },
+    caption: (f) => {
+      const split = f.split
+        .slice(0, 3)
+        .map((p) => `${p.label.toLowerCase()} ${pct(p.share)}`)
+        .join(', ');
+      if (!f.hasPlan) return split || `${plural(f.sessions, 'session')} priced at list rates.`;
+      return `${split}. The plan cost ${dollars(f.planCost)} — ${gapClause(f)}.`;
+    },
+  },
+];
+
+const angleFor = (id) => ANGLES.find((a) => a.id === id) ?? ANGLES[0];
+
+export function headline(f, angle = 'value') {
+  return angleFor(angle).headline(f);
 }
 
-/** The one-line version that fits on the image under the headline number. */
-export function imageCaption(f) {
-  if (f.subscription && f.ratio) {
-    return `I paid ${planClause(f)} — ${f.ratio.toFixed(1)}× value.`;
+/**
+ * The second line of a post: the context the headline assumes.
+ *
+ * `compact` drops the session and project counts. They are the least load-
+ * bearing sentence here and the first thing worth losing when the post has to
+ * fit — see `shareText`.
+ */
+export function subhead(f, angle = 'value', { compact = false } = {}) {
+  const scale = compact ? '' : ` ${plural(f.sessions, 'session')} across ${plural(f.projects, 'project')}.`;
+  // The plan's *name* is half the interest in the post — "$600" says nothing,
+  // "$600 of Claude Max 20×" tells a reader which tier produced the number.
+  const against = f.hasPlan ? `, against ${dollars(f.planCost)} of ${f.planName}` : '';
+
+  if (angle === 'split') {
+    const split = f.split
+      .slice(0, compact ? 2 : 3)
+      .map((p) => `${p.label.toLowerCase()} ${pct(p.share)}`)
+      .join(', ');
+    if (!f.hasPlan) return `${split}.${scale}`;
+    return `${split}. The plan cost ${dollars(f.planCost)} — ${gapClause(f)}.${scale}`;
   }
-  if (f.subscription) return `I paid ${planClause(f)}.`;
-  if (f.apiCreditsSpent > 0) return `Billed straight to API credits.`;
-  return `Never billed to me. This is what it would have cost.`;
+
+  if (angle === 'runrate') {
+    return f.hasPlan
+      ? `${dollars(f.total)} of work over ${plural(f.months, 'month')}${against}.${scale}`
+      : `${dollars(f.total)} over ${plural(f.months, 'month')}.${scale}`;
+  }
+
+  return f.hasPlan
+    ? `${dollars(f.total)} at API list rates over ${plural(f.months, 'month')}${against}.${scale}`
+    : `${dollars(f.total)} at API list rates.${scale}`;
 }
+
+/** The one line under the big number on the card. */
+export function imageCaption(f, angle = 'value') {
+  return angleFor(angle).caption(f);
+}
+
+export function imageEyebrow(f, angle = 'value') {
+  return angleFor(angle).eyebrow(f);
+}
+
+export function imageNumber(f, angle = 'value') {
+  return angleFor(angle).number(f);
+}
+
+const CLOSER = `Priced from my own transcripts by ${PRODUCT}:`;
 
 /**
  * A post.
  *
- * `short` is written to clear 280 characters so X and Bluesky never truncate
- * the link — the URL is the only part of the post that has a job to do.
+ * The short form is **fitted to 280 characters, not written and hoped for.**
+ * Four angles times a plan that may be ahead or behind times numbers from $4 to
+ * $987,654 is more combinations than anyone will re-count by hand, and the one
+ * that overruns loses the end of the post — which is the link, the only part
+ * with a job to do.
+ *
+ * So it degrades in a fixed order, dropping the least load-bearing thing first:
+ * the session and project counts, then the sentence naming the tool, and only
+ * ever the link last, by never dropping it at all.
  */
-export function shareText(f, { tone = 'short' } = {}) {
+export function shareText(f, { tone = 'short', angle = 'value', limit = 280 } = {}) {
   if (tone === 'long') {
     return [
-      headline(f),
+      headline(f, angle),
       '',
       'Claude Code writes a transcript of every session to your own disk, and every reply in it carries the exact token counts the API measured. Almost nobody adds them up.',
       '',
-      `So: ${subhead(f)} Split by model, by project and by day, with the cache traffic priced at the multipliers the API really bills.`,
+      `So: ${subhead(f, angle)} Split by model, by project and by day, with the cache traffic priced at the multipliers the API really bills.`,
       '',
       `${PRODUCT} is one Node command. No dependencies, no build step, no account, no API key, and nothing leaves the machine.`,
       '',
@@ -198,18 +347,22 @@ export function shareText(f, { tone = 'short' } = {}) {
     ].join('\n');
   }
 
-  return [
-    headline(f),
-    '',
-    subhead(f),
-    '',
-    `Priced locally by ${PRODUCT}, from transcripts already on my disk:`,
-    REPO_SHORT,
-  ].join('\n');
+  const head = headline(f, angle);
+  const candidates = [
+    [head, '', subhead(f, angle), '', CLOSER, REPO_SHORT],
+    [head, '', subhead(f, angle, { compact: true }), '', CLOSER, REPO_SHORT],
+    [head, '', subhead(f, angle, { compact: true }), '', REPO_SHORT],
+    [head, '', REPO_SHORT],
+  ].map((lines) => lines.join('\n'));
+
+  return candidates.find((text) => text.length <= limit) ?? candidates[candidates.length - 1];
 }
 
-export function redditTitle(f) {
-  return `${PRODUCT} — I priced every Claude Code session on my disk. ${headline(f)}`.slice(0, 300);
+export function redditTitle(f, angle = 'value') {
+  return `${PRODUCT} — I priced every Claude Code session on my disk. ${headline(f, angle)}`.slice(
+    0,
+    300,
+  );
 }
 
 export function hackerNewsTitle() {
@@ -230,9 +383,9 @@ const enc = encodeURIComponent;
  * pretends otherwise sends someone to an empty box wondering where their text
  * went. Both copy the text to the clipboard on the way out instead.
  */
-export function shareTargets(f, { short, long } = {}) {
-  const brief = short ?? shareText(f, { tone: 'short' });
-  const full = long ?? shareText(f, { tone: 'long' });
+export function shareTargets(f, { short, long, angle = 'value' } = {}) {
+  const brief = short ?? shareText(f, { tone: 'short', angle });
+  const full = long ?? shareText(f, { tone: 'long', angle });
 
   return [
     {
@@ -262,7 +415,7 @@ export function shareTargets(f, { short, long } = {}) {
     {
       id: 'reddit',
       label: 'Reddit',
-      href: `https://www.reddit.com/submit?type=TEXT&title=${enc(redditTitle(f))}&text=${enc(full)}`,
+      href: `https://www.reddit.com/submit?type=TEXT&title=${enc(redditTitle(f, angle))}&text=${enc(full)}`,
       prefills: true,
       note: 'Opens a self-post. r/ClaudeAI and r/LocalLLaMA are the on-topic ones.',
     },
@@ -351,9 +504,10 @@ function drawMark(ctx, x, y, size, color) {
  * re-encoded by whichever platform receives it, and 1× text does not survive
  * that.
  */
-export function paintShareCard(canvas, f, { format = 'landscape', scale = 2 } = {}) {
+export function paintShareCard(canvas, f, { format = 'landscape', scale = 2, angle = 'value' } = {}) {
   const spec = FORMATS.find((x) => x.id === format) ?? FORMATS[0];
   const { w, h } = spec;
+  const tall = spec.id !== 'landscape';
 
   canvas.width = Math.round(w * scale);
   canvas.height = Math.round(h * scale);
@@ -374,7 +528,11 @@ export function paintShareCard(canvas, f, { format = 'landscape', scale = 2 } = 
    */
   const typeScale = spec.id === 'portrait' ? 1.42 : spec.id === 'square' ? 1.2 : 1;
   const u = w * typeScale;
-  const gap = h * (spec.id === 'landscape' ? 0.022 : 0.03);
+  // The tall crops get a looser rhythm as well as bigger type. Filling 4:5 by
+  // stretching gaps alone leaves a dense little block in a large empty frame —
+  // the extra room wants extra *content*, which is what the vertical split
+  // below is for, with the gaps opened just enough to let it breathe.
+  const gap = h * (tall ? 0.026 : 0.022);
 
   /* ---- ground ---- */
   ctx.fillStyle = '#0a0c11';
@@ -450,7 +608,7 @@ export function paintShareCard(canvas, f, { format = 'landscape', scale = 2 } = 
   // The number is the point of the card, so it is fitted rather than clipped:
   // somebody with a five-figure total should get a smaller headline, not a
   // headline that runs off the edge into the margin.
-  const numberText = dollars(f.total);
+  const numberText = imageNumber(f, angle);
   let numberSize = Math.round(u * 0.118);
   ctx.font = font(700, numberSize);
   while (ctx.measureText(numberText).width > colWidth && numberSize > u * 0.05) {
@@ -459,7 +617,16 @@ export function paintShareCard(canvas, f, { format = 'landscape', scale = 2 } = 
   }
 
   ctx.font = font(500, captionSize);
-  const captionLines = wrap(ctx, imageCaption(f), colWidth);
+  const captionLines = wrap(ctx, imageCaption(f, angle), colWidth);
+
+  // On the tall crops the split becomes a list: a row per component with its own
+  // bar. It is more readable at arm's length than a legend under a stacked bar,
+  // and it is the content the extra height was missing.
+  const listRows = tall ? parts.slice(0, 4) : [];
+  const rowHeight = legendSize * 2.5;
+  const splitHeight = parts.length
+    ? gap * 1.5 + barH + (listRows.length ? gap * 0.7 + listRows.length * rowHeight : gap * 0.9 + legendSize)
+    : 0;
 
   /**
    * The exact distance the stack below will travel.
@@ -473,11 +640,15 @@ export function paintShareCard(canvas, f, { format = 'landscape', scale = 2 } = 
     eyebrowSize +
     gap * 0.5 +
     numberSize * 0.82 +
-    gap +
+    // The number carries descenders — a comma, a slash in "/mo" — and the
+    // caption sits directly under it in a much smaller size. A single gap here
+    // left about twenty pixels between the two at 1200px wide, which reads as a
+    // collision even when it is not one.
+    gap * 1.35 +
     captionLines.length * captionSize * 1.32 +
     gap * 0.5 +
     metaSize +
-    (parts.length ? gap * 1.6 + barH + gap * 0.9 + legendSize : 0);
+    splitHeight;
 
   let y = headerBottom + Math.max(0, (footerTop - headerBottom - stackHeight) / 2);
 
@@ -486,7 +657,7 @@ export function paintShareCard(canvas, f, { format = 'landscape', scale = 2 } = 
   ctx.font = font(600, eyebrowSize);
   ctx.letterSpacing = `${(eyebrowSize * 0.16).toFixed(2)}px`;
   ctx.fillStyle = '#98a2b8';
-  ctx.fillText('CLAUDE CODE, PRICED AT API LIST RATES', pad, y);
+  ctx.fillText(imageEyebrow(f, angle), pad, y);
   ctx.letterSpacing = '0px';
 
   // The number
@@ -501,7 +672,7 @@ export function paintShareCard(canvas, f, { format = 'landscape', scale = 2 } = 
   ctx.fillText(numberText, pad, y);
 
   // Caption
-  y += gap;
+  y += gap * 1.35;
   ctx.font = font(500, captionSize);
   ctx.fillStyle = '#e8ecf5';
   for (const line of captionLines) {
@@ -522,34 +693,68 @@ export function paintShareCard(canvas, f, { format = 'landscape', scale = 2 } = 
 
   /* ---- the split, which is the part that says this came from real data ---- */
   if (parts.length) {
-    y += gap * 1.6;
-    let x = pad;
+    y += gap * 1.5;
     const denominator = parts.reduce((sum, p) => sum + p.share, 0) || 1;
+    const colorOf = (part) => COMPONENT_COLORS[part.id] ?? '#4b5568';
+    const chip = legendSize * 0.72;
+
+    let x = pad;
     ctx.save();
     roundRect(ctx, pad, y, colWidth, barH, barH / 2);
     ctx.clip();
     for (const part of parts) {
       const segment = (part.share / denominator) * colWidth;
-      ctx.fillStyle = COMPONENT_COLORS[part.id] ?? '#4b5568';
+      ctx.fillStyle = colorOf(part);
       ctx.fillRect(x, y, segment + 1, barH);
       x += segment;
     }
     ctx.restore();
+    y += barH;
 
-    y += barH + gap * 0.9 + legendSize;
-    ctx.font = font(500, legendSize);
-    let lx = pad;
-    for (const part of parts.slice(0, 4)) {
-      const chip = legendSize * 0.72;
-      const label = `${part.label} ${pct(part.share)}`;
-      const width = chip + legendSize * 0.5 + ctx.measureText(label).width + legendSize * 1.5;
-      if (lx + width > pad + colWidth) break;
-      ctx.fillStyle = COMPONENT_COLORS[part.id] ?? '#4b5568';
-      roundRect(ctx, lx, y - chip, chip, chip, chip * 0.3);
-      ctx.fill();
-      ctx.fillStyle = '#98a2b8';
-      ctx.fillText(label, lx + chip + legendSize * 0.5, y);
-      lx += width;
+    if (listRows.length) {
+      // A row per component, each with its own bar. Reads at arm's length on a
+      // phone, where a legend under a stacked bar is four tiny labels in a line.
+      y += gap * 0.7;
+      ctx.font = font(500, legendSize);
+      const widest = Math.max(...listRows.map((p) => ctx.measureText(pct(p.share)).width));
+      for (const part of listRows) {
+        const color = colorOf(part);
+        const baseline = y + legendSize;
+        ctx.fillStyle = color;
+        roundRect(ctx, pad, baseline - chip, chip, chip, chip * 0.3);
+        ctx.fill();
+        ctx.fillStyle = '#ccd3e2';
+        ctx.fillText(part.label, pad + chip + legendSize * 0.6, baseline);
+        // Percentages right-aligned to a common edge, so they read as a column
+        // rather than as the tail of four different sentences.
+        ctx.fillStyle = '#98a2b8';
+        ctx.fillText(pct(part.share), pad + colWidth - widest, baseline);
+
+        const track = y + legendSize * 1.5;
+        const trackH = legendSize * 0.32;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.07)';
+        roundRect(ctx, pad, track, colWidth, trackH, trackH / 2);
+        ctx.fill();
+        ctx.fillStyle = color;
+        roundRect(ctx, pad, track, Math.max(trackH, colWidth * (part.share / denominator)), trackH, trackH / 2);
+        ctx.fill();
+        y += rowHeight;
+      }
+    } else {
+      y += gap * 0.9 + legendSize;
+      ctx.font = font(500, legendSize);
+      let lx = pad;
+      for (const part of parts.slice(0, 4)) {
+        const label = `${part.label} ${pct(part.share)}`;
+        const width = chip + legendSize * 0.5 + ctx.measureText(label).width + legendSize * 1.5;
+        if (lx + width > pad + colWidth) break;
+        ctx.fillStyle = colorOf(part);
+        roundRect(ctx, lx, y - chip, chip, chip, chip * 0.3);
+        ctx.fill();
+        ctx.fillStyle = '#98a2b8';
+        ctx.fillText(label, lx + chip + legendSize * 0.5, y);
+        lx += width;
+      }
     }
   }
 

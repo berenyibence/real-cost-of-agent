@@ -15,11 +15,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  ANGLES,
   FORMATS,
   REPO_URL,
   dollars,
   hackerNewsTitle,
   headline,
+  imageCaption,
+  imageEyebrow,
+  imageNumber,
   redditTitle,
   shareFacts,
   shareTargets,
@@ -63,13 +67,15 @@ const payload = {
   billing: {
     authMode: 'subscription',
     authEvidence: 'oauth beta present in 44 of 60 sampled telemetry events',
+    metered: false,
     plan: { id: 'max20', name: 'Claude Max 20×', monthly: 200 },
     months: 3,
     apiEquivalent: 1284.42,
-    subscriptionCost: 600,
-    saved: 684.42,
+    planCost: 600,
+    difference: 684.42,
     ratio: 2.1407,
-    apiCreditsSpent: 0,
+    verdict: 'plan-ahead',
+    partialPeriod: false,
     onSubscription: true,
   },
   meta: {
@@ -80,18 +86,23 @@ const payload = {
   },
 };
 
-/** Every string a post can produce, from one payload. */
+/** Every string a post can produce, from one payload, across every angle. */
 function everythingShareable(spend) {
   const f = shareFacts(spend);
-  return [
-    JSON.stringify(f),
-    shareText(f, { tone: 'short' }),
-    shareText(f, { tone: 'long' }),
-    headline(f),
-    redditTitle(f),
-    hackerNewsTitle(),
-    ...shareTargets(f).flatMap((t) => [t.href ?? '', t.label, t.note ?? '']),
-  ].join('\n');
+  const strings = [JSON.stringify(f), hackerNewsTitle()];
+  for (const { id } of ANGLES) {
+    strings.push(
+      shareText(f, { tone: 'short', angle: id }),
+      shareText(f, { tone: 'long', angle: id }),
+      headline(f, id),
+      imageEyebrow(f, id),
+      imageNumber(f, id),
+      imageCaption(f, id),
+      redditTitle(f, id),
+      ...shareTargets(f, { angle: id }).flatMap((t) => [t.href ?? '', t.label, t.note ?? '']),
+    );
+  }
+  return strings.join('\n');
 }
 
 test('nothing identifying about the work reaches a post', () => {
@@ -113,16 +124,20 @@ test('the facts are an allowlist, so a new spend field is not shared by accident
   assert.deepEqual(
     Object.keys(facts).sort(),
     [
-      'apiCreditsSpent',
+      'hasPlan',
+      'metered',
       'months',
-      'paid',
+      'perMonth',
+      'planCost',
+      'planMonthly',
       'planName',
       'projects',
       'ratio',
+      'saved',
       'sessions',
       'split',
-      'subscription',
       'total',
+      'verdict',
     ],
     'a key changed here — check it carries no project, path or session title',
   );
@@ -132,12 +147,14 @@ test('the facts are an allowlist, so a new spend field is not shared by accident
   }
 });
 
-test('a subscription is described as value received, never as money charged', () => {
+test('a plan is described as a price compared, never as money charged', () => {
   const f = shareFacts(payload);
-  const text = shareText(f, { tone: 'short' });
+  const text = shareText(f, { tone: 'short', angle: 'value' });
 
-  assert.equal(f.subscription, true);
-  assert.equal(f.paid, 600, 'the plan over the months it spans, not one month');
+  assert.equal(f.hasPlan, true);
+  assert.equal(f.planCost, 600, 'the plan over the months it spans, not one month');
+  assert.equal(f.planMonthly, 200);
+  assert.equal(Math.round(f.saved), 684);
   assert.match(text, /2\.1×/);
   assert.match(text, /\$1,284/);
   assert.match(text, /Claude Max 20×/);
@@ -146,25 +163,95 @@ test('a subscription is described as value received, never as money charged', ()
   assert.equal(/I (spent|paid) \$1,284/.test(text), false, text);
 });
 
-test('API billing is not dressed up as a saving', () => {
+/** The same payload with the plan losing: $200/month against $12 of tokens. */
+const planBehind = {
+  ...payload,
+  total: 12.4,
+  components: payload.components.map((c) => ({ ...c, cost: c.cost / 100 })),
+  billing: {
+    ...payload.billing,
+    months: 1,
+    apiEquivalent: 12.4,
+    planCost: 200,
+    difference: -187.6,
+    ratio: 0.062,
+    verdict: 'api-ahead',
+  },
+};
+
+test('every angle names the gap, in whichever direction it runs', () => {
+  // The user-facing promise of the panel: whichever angle you pick, the post
+  // says what the plan did or did not buy. An angle that quietly drops it is an
+  // angle that posts a number with no argument attached.
+  const ahead = shareFacts(payload);
+  const behind = shareFacts(planBehind);
+
+  for (const { id } of ANGLES) {
+    const good = `${headline(ahead, id)} ${imageCaption(ahead, id)}`;
+    assert.match(good, /\$684|2\.1×|684/, `angle "${id}" never mentions the gap:\n${good}`);
+
+    const bad = `${headline(behind, id)} ${imageCaption(behind, id)}`;
+    assert.match(bad, /\$18[78]|0\.1×|less/, `angle "${id}" hides a losing plan:\n${bad}`);
+  }
+});
+
+test('a plan that lost money is never described as a saving', () => {
+  const f = shareFacts(planBehind);
+  assert.equal(f.verdict, 'api-ahead');
+  assert.ok(f.saved < 0, 'the gap is signed, so it can report an overspend');
+
+  for (const { id } of ANGLES) {
+    const text = `${headline(f, id)} ${imageCaption(f, id)} ${imageEyebrow(f, id)}`;
+    assert.equal(
+      /never billed for|was never billed|of usage I was never/i.test(text),
+      false,
+      `angle "${id}" claims a saving that did not happen:\n${text}`,
+    );
+  }
+
+  // And the strongest version of that claim is inverted outright.
+  assert.match(headline(f, 'saved'), /cost \$188 more than the work was worth/);
+  assert.match(imageEyebrow(f, 'saved'), /ABOVE METERED RATES/);
+});
+
+test('with no plan set, nothing is claimed about one', () => {
   const f = shareFacts({
     ...payload,
     billing: {
       ...payload.billing,
       authMode: 'api',
-      subscriptionCost: 0,
+      metered: true,
+      plan: { id: 'none', name: 'No subscription', monthly: 0 },
+      planCost: 0,
+      difference: 0,
       ratio: null,
-      apiCreditsSpent: 1284.42,
+      verdict: 'no-plan',
       onSubscription: false,
     },
   });
 
-  assert.equal(f.subscription, false);
+  assert.equal(f.hasPlan, false);
   assert.equal(f.planName, null);
   assert.equal(f.ratio, null);
-  const text = shareText(f, { tone: 'short' });
-  assert.match(text, /billed straight to API credits/i);
-  assert.equal(/value|returned|saved/i.test(text), false, text);
+  assert.equal(f.saved, 0);
+  assert.equal(f.metered, true);
+
+  for (const { id } of ANGLES) {
+    const text = `${headline(f, id)} ${imageCaption(f, id)}`;
+    assert.equal(/plan cost|of plan|my plan/i.test(text), false, `angle "${id}": ${text}`);
+    assert.equal(text.includes('NaN'), false, text);
+    assert.equal(text.includes('undefined'), false, text);
+  }
+});
+
+test('the run-rate angle answers the question it exists for', () => {
+  // "Could I afford this habit if I were paying per token?" — a monthly figure,
+  // next to the monthly plan price, which is the number people actually know.
+  const f = shareFacts(payload);
+  assert.equal(Math.round(f.perMonth), 428, '$1,284.42 over 3 months');
+  assert.equal(imageNumber(f, 'runrate'), '$428/mo');
+  assert.match(headline(f, 'runrate'), /\$428 a month/);
+  assert.match(imageCaption(f, 'runrate'), /\$200\/mo of Claude Max 20×/);
 });
 
 test('a short post clears 280 characters, so the link is never what gets truncated', () => {
@@ -176,16 +263,36 @@ test('a short post clears 280 characters, so the link is never what gets truncat
       ...payload.billing,
       plan: { id: 'team', name: 'Team (per seat)', monthly: 30 },
       months: 144,
-      subscriptionCost: 432_000,
+      apiEquivalent: 987_654.32,
+      planCost: 432_000,
+      difference: 555_654.32,
       ratio: 2.2862,
     },
     meta: { ...payload.meta, sessions: 999_999, workspaces: 4321 },
   });
 
-  for (const f of [shareFacts(payload), wide]) {
-    const text = shareText(f, { tone: 'short' });
-    assert.ok(text.length <= 280, `${text.length} chars:\n${text}`);
-    assert.ok(text.includes('github.com/berenyibence/real-cost-of-agent'), text);
+  // Every angle has to fit, not just the default one — a length that only holds
+  // for the shortest headline is a length that breaks the first time somebody
+  // picks a different tab.
+  for (const f of [shareFacts(payload), shareFacts(planBehind), wide]) {
+    for (const { id } of ANGLES) {
+      const text = shareText(f, { tone: 'short', angle: id });
+      assert.ok(text.length <= 280, `angle "${id}" ran to ${text.length} chars:\n${text}`);
+      assert.ok(text.includes('github.com/berenyibence/real-cost-of-agent'), text);
+    }
+  }
+});
+
+test('every angle produces a card headline that fits on a card', () => {
+  for (const f of [shareFacts(payload), shareFacts(planBehind)]) {
+    for (const { id, label, note } of ANGLES) {
+      assert.ok(label, 'an angle needs a label for its button');
+      assert.ok(note, `angle "${id}" needs a note explaining when to pick it`);
+      const number = imageNumber(f, id);
+      assert.ok(number.length <= 12, `angle "${id}" headline "${number}" is too long for the card`);
+      assert.equal(/NaN|undefined|Infinity/.test(number), false, `${id}: ${number}`);
+      assert.equal(imageEyebrow(f, id), imageEyebrow(f, id).toUpperCase(), `${id} eyebrow`);
+    }
   }
 });
 
