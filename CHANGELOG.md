@@ -2,6 +2,56 @@
 
 Notable changes, newest first. Dates are the day the change landed on `main`.
 
+## 0.3.0 — 2026-08-09
+
+The billing panel stopped claiming something it could not know, and the share card learned to argue
+four different ways — including against the plan.
+
+### Removed
+
+- **"API credits spent: $0."** The green tick block is gone, and `compareBilling` no longer returns
+  `apiCreditsSpent`. Nothing in `~/.claude` records a charge: the transcripts carry token counts and
+  a `service_tier`, and no field anywhere names a dollar, a credit or an invoice. That figure was
+  inferred from the OAuth beta appearing in local telemetry — a reasonable inference, printed under a
+  tick mark with a measurement's worth of confidence. Auth mode is still detected and still shown,
+  because it says which of the two prices is the hypothetical one; it never says what anyone was
+  billed.
+
+### Added
+
+- **A verdict, which is allowed to go against the plan.** `compareBilling` returns `plan-ahead`,
+  `close`, `api-ahead`, `no-plan` or `no-usage`, and the panel renders each in the same voice at the
+  same size. When the plan costs more than the usage was worth, the page says so and points at
+  metered API billing rather than quietly reporting a smaller multiple.
+- **`partialPeriod`.** A fresh install has three days of history and is charged for a whole month,
+  which makes any plan look like a bad deal. The comparison is still shown — it is the honest one for
+  the data present — and the page now says what it is looking at.
+- **Four share angles**, each supplying the post and the card headline together so they cannot
+  contradict each other: **Value** (what $1 of plan bought), **Saved** (the dollars, and the number
+  people repeat), **Run rate** (what the habit costs per month metered — the "is Max worth it?" and
+  "could I afford this at all?" question), and **Breakdown** (output versus cache, for an audience
+  that would rather argue about that).
+  - Every angle names the gap, and every angle inverts when the gap runs the other way. The "Saved"
+    angle becomes what the plan cost *above* metered rates. No combination of settings produces a
+    saving that did not happen.
+- **Screenshots in the README**, generated from real data with the by-project and by-session cuts
+  deliberately excluded.
+
+### Changed
+
+- **Short posts are fitted to 280 characters rather than written and hoped for.** Four angles times a
+  plan that may be ahead or behind times numbers from $4 to $987,654 is more combinations than anyone
+  re-counts by hand, and an overrun costs the end of the post — which is the link. `shareText` now
+  degrades in a fixed order: the session and project counts go first, then the sentence naming the
+  tool, and the link never goes at all.
+- **The portrait and square cards render the split as a list** with a bar per component, instead of a
+  legend under a stacked bar. It reads at arm's length on a phone, and it was the content the extra
+  height was missing — 4:5 filled by stretching gaps alone is a dense block in an empty frame.
+- `subscriptionCost` is now `planCost`, and `saved` is now `difference` and signed.
+- The warning amber is a token in both themes; the dark theme's `#f0a35e` is 2.1:1 on white.
+- The share panel's character count states the consequence instead of scolding — a long post is
+  *meant* to be over 280, and only turns amber when the length contradicts the length you asked for.
+
 ## 0.2.0 — 2026-08-09
 
 Renamed to **Real Cost of Agent**, and given a way to say the number out loud.

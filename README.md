@@ -36,19 +36,30 @@ Claude Code writes a transcript of every session to `~/.claude`, and every assis
 carries the exact token counts the API measured — input, output, cache reads, cache writes, per
 model, per request. The billing was done from those numbers. Almost nobody adds them up.
 
-This does, and then refuses to print one figure, because the same tokens mean different things on
-different meters:
+This does, and then compares it against what you pay.
 
-- **Auth mode is detected, not assumed.** Claude Code records its beta set in local telemetry, and
-  the presence of the OAuth beta means subscription authentication.
-- **On a subscription, API credits spent is $0** — and the page says so plainly. The token figure is
-  what the work _would_ have cost on the API: value received, not money charged.
-- Set your plan and the page compares its price over the period against the API-equivalent spend to
-  give the effective multiple. Your plan tier is not recorded anywhere on disk, and published prices
-  change, so both are editable rather than asserted as fact.
+![The plan-versus-list-rates panel](docs/screenshots/plan-vs-list-rates.png)
+
+**Two prices, not two invoices.** Nothing in `~/.claude` records what you were charged. The
+transcripts carry token counts and a `service_tier`; no field anywhere names a dollar, a credit or an
+invoice. So both figures are computed, and the page says so next to them rather than in a footnote:
+
+- **The left-hand number** is your recorded tokens at published list rates.
+- **The middle number** is the plan price _you_ entered, times the months your transcripts span. Your
+  tier is not on disk anywhere and published prices change, so it is editable rather than asserted.
+- **Auth mode is detected**, from the beta set Claude Code records in local telemetry. That tells you
+  which of the two figures is the hypothetical one. It does not tell you what you were billed, and
+  the page no longer pretends otherwise.
+
+**The verdict can go against the plan.** When your usage does not justify what you pay, the panel
+says so and points at metered API billing — same voice, same size, same prominence as when it goes
+the other way. A tool that can only ever conclude "your subscription is excellent" is an
+advertisement.
 
 **Where the money went.** The headline number is the top of a tree. Each cut re-splits the same
 dollars a different way, so a figure can be opened until it stops being a mystery:
+
+![What the tokens were, split five ways](docs/screenshots/where-the-money-went.png)
 
 | Cut                  | Answers                                                    |
 | -------------------- | ---------------------------------------------------------- |
@@ -57,6 +68,19 @@ dollars a different way, so a figure can be opened until it stops being a myster
 | By project           | Which codebases cost the most                              |
 | By day               | When the spend happened                                    |
 | By session           | The individual runs that dominate                          |
+
+<details>
+<summary><b>More cuts, and the light theme</b></summary>
+
+<br />
+
+![By model](docs/screenshots/by-model.png)
+
+![By day](docs/screenshots/by-day.png)
+
+![The same panel in the light theme](docs/screenshots/light-theme.png)
+
+</details>
 
 **What the total leaves out.** Two caveats travel with the figure rather than being buried: sessions
 priced at their tier's rate because the exact model id is not in the catalog, and sessions excluded
@@ -69,17 +93,35 @@ Most people have no idea what their agent use is worth. The page will build the 
 card image and the words to go with it — for X, Bluesky, LinkedIn, Threads, Reddit, Hacker News,
 Facebook and Instagram.
 
-Two things are true of it, and both are deliberate:
+![The share panel](docs/screenshots/share-panel.png)
+
+**Four angles, because the same numbers persuade different people for different reasons.** Picking
+one rewrites the words and the headline on the card together, so they can never contradict each
+other:
+
+| Angle         | The question it answers                                          | Best for                            |
+| ------------- | ---------------------------------------------------------------- | ----------------------------------- |
+| **Value**     | What did every $1 of plan actually buy?                          | A large multiple — often Pro at $20 |
+| **Saved**     | How many dollars of work was I never billed for?                 | The number people repeat            |
+| **Run rate**  | What would this habit cost per month if I paid per token?        | Deciding whether Max at $200 is worth it, or whether metered is even affordable |
+| **Breakdown** | Where did it actually go — output, or cache?                     | A technical audience                |
+
+Every angle names the gap, and **every angle survives it running the other way.** If your plan cost
+more than your usage was worth, the card says that instead — the "Saved" angle inverts to what the
+plan cost above metered rates. There is no combination of settings that produces a saving you did not
+make.
+
+Two more things are true of the panel, and both are deliberate:
 
 - **Nothing is posted by this page.** Each button opens that platform's own composer in a new tab
   with the text already in it. The post is still yours to edit, or to abandon. Those links are the
   only thing in this project that points off your machine.
 - **Only aggregates can travel.** The share panel is handed a fixed set of numbers — the total, your
-  plan's name, the month count, how many sessions and projects, and the percentage split. Project
-  names, file paths and session titles are not in the data it receives, so no amount of editing can
-  put them in a post. That boundary is one function in [`web/share.js`](web/share.js), and
-  [`test/share.test.js`](test/share.test.js) asserts it against a payload seeded with paths in every
-  field that has one.
+  plan's name and price, the month count, how many sessions and projects, and the percentage split.
+  Project names, file paths and session titles are not in the data it receives, so no amount of
+  editing can put them in a post. That boundary is one function in [`web/share.js`](web/share.js),
+  and [`test/share.test.js`](test/share.test.js) asserts it against a payload seeded with paths in
+  every field that has one, across every angle.
 
 The image is painted on a canvas in your browser and saved with **Download image**, at 1200×630 for
 X, LinkedIn and Facebook, or 1080×1350 and 1080×1080 for Instagram and Threads.

@@ -63,7 +63,19 @@ transcripts should mean writing one new scanner, not touching the pricing.
 8. **Only one file is ever written**: `~/.config/real-cost-of-agent/config.json`. `~/.claude` is
    read-only here — it belongs to Claude Code. The pre-rename `~/.config/agent-spend/config.json` is
    still _read_ as a fallback, and must never be written.
-9. **Nothing identifying leaves the share panel.** `shareFacts` in `web/share.js` is an allowlist of
+9. **No dollar figure is reported that did not come off this machine.** Nothing in `~/.claude`
+   records a charge — transcripts carry token counts and a `service_tier`, and no field anywhere
+   names a dollar, a credit or an invoice. There are exactly two money figures in this app: recorded
+   tokens at published rates, and the plan price the user typed. `compareBilling` used to also return
+   `apiCreditsSpent: 0`, inferred from the OAuth beta appearing in telemetry, and the page printed it
+   under a green tick — a measurement's worth of confidence behind a guess. Auth detection says which
+   of the two figures is the hypothetical one; it never says what anybody was billed.
+10. **The verdict is allowed to be unflattering.** When a plan costs more than the usage was worth,
+    `compareBilling` returns `api-ahead`, the page says so and points at metered billing, and every
+    share angle inverts with it. Same voice, same size, same prominence as the good news. A tool that
+    can only ever conclude "your subscription is excellent" is an advertisement, and the verdicts
+    that go the other way are what make the rest of them worth believing.
+11. **Nothing identifying leaves the share panel.** `shareFacts` in `web/share.js` is an allowlist of
    aggregates, deliberately an allowlist rather than a redaction pass — a new field on `/api/spend`
    should have to be invited into a post rather than arrive in one by default. Project names, paths
    and session titles are not in the shape it returns. `test/share.test.js` asserts this against a

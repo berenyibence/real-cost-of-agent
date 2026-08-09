@@ -71,7 +71,18 @@ is otherwise.
 8. **Only one file is ever written**: `~/.config/real-cost-of-agent/config.json`. `~/.claude` is
    read-only here — it belongs to Claude Code, and corrupting somebody's transcripts to compute a
    statistic about them would be unforgivable.
-9. **Nothing identifying leaves the share panel.** `shareFacts` in [`web/share.js`](web/share.js) is
+9. **No dollar figure is reported that did not come off this machine.** Nothing in `~/.claude`
+   records a charge — transcripts carry token counts and a `service_tier`, and no field anywhere
+   names a dollar, a credit or an invoice. There are exactly two money figures: recorded tokens at
+   published rates, and the plan price the user typed. Auth detection says which of them is the
+   hypothetical one; it never says what anybody was billed. An earlier version reported
+   `apiCreditsSpent: 0` from the auth heuristic and the page printed it under a green tick, which is
+   a measurement's worth of confidence behind a guess.
+10. **The verdict is allowed to be unflattering.** When a plan costs more than the usage was worth,
+    the page says so and points at metered billing, in the same voice and at the same size as the
+    good news, and every share angle inverts with it. A tool that can only conclude "your
+    subscription is excellent" is an advertisement.
+11. **Nothing identifying leaves the share panel.** `shareFacts` in [`web/share.js`](web/share.js) is
    an allowlist of aggregates, and it is deliberately an allowlist rather than a redaction pass: a
    new field on `/api/spend` should have to be invited into a post. If you add something shareable,
    add it to the key assertion in `test/share.test.js` too.
@@ -113,6 +124,17 @@ asserts everything sums to the total.
 and a `note` if it cannot take the text. Add its host to the assertion in `test/share.test.js`. Use a
 text label, not the platform's logo: a remote logo is a network request this project does not make,
 and a bundled one is somebody else's trademark shipped under our licence.
+
+**A new share angle.** Add an entry to `ANGLES` in `web/share.js`. It supplies the words and the
+card's headline together, so they cannot drift apart. Three things every angle owes the reader, all
+of them asserted in `test/share.test.js`:
+
+- It names the gap between the plan and the list-rate figure. That is the number people repeat.
+- It survives the gap running the **other** way. Write the losing case first — the test seeds a plan
+  that cost more than the work was worth and fails any angle that still claims a saving.
+- Its short post fits 280 characters, for every plan name and every magnitude of number. `shareText`
+  degrades in a fixed order to guarantee this, so the thing to check is that your headline is not so
+  long it forces the fallback on ordinary data.
 
 ## Style
 
