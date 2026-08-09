@@ -19,10 +19,11 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { CLAUDE_DIR } from './scan.js';
-import { CONFIG_DIR } from './paths.js';
+import { CONFIG_DIR, LEGACY_CONFIG_DIR } from './paths.js';
 
 const TELEMETRY_DIR = path.join(CLAUDE_DIR, 'telemetry');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+const LEGACY_CONFIG_FILE = path.join(LEGACY_CONFIG_DIR, 'config.json');
 
 /**
  * Default monthly prices, in USD. These are starting points the user can edit —
@@ -77,12 +78,16 @@ export function sanitizeConfig(raw) {
   return config;
 }
 
+/** The stored preferences, falling back to the pre-rename location before the defaults. */
 export function readConfig() {
-  try {
-    return sanitizeConfig(JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')));
-  } catch {
-    return { ...DEFAULT_CONFIG };
+  for (const file of [CONFIG_FILE, LEGACY_CONFIG_FILE]) {
+    try {
+      return sanitizeConfig(JSON.parse(fs.readFileSync(file, 'utf8')));
+    } catch {
+      /* absent or unparseable — try the next, then the defaults */
+    }
   }
+  return { ...DEFAULT_CONFIG };
 }
 
 /**

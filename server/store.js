@@ -112,6 +112,6 @@ export async function refresh() {
 
 export function startWatching() {
   return watch(() => {
-    refresh().catch((err) => console.error('[agent-spend] rescan failed:', err.message));
+    refresh().catch((err) => console.error('[real-cost] rescan failed:', err.message));
   });
 }

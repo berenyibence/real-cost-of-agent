@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Real Cost of Agent">
+  <!--
+    The mark: a receipt with a figure printed on it.
+
+    A receipt because that is what the tool does — it prints the itemised bill
+    for work that, on a subscription, nobody ever sent you. Stroked rather than
+    filled so it sits in the same 24px, 1.7-weight icon set as everything else
+    in the page, and reads at 16px in a browser tab.
+
+    `currentColor` is deliberate: the page inherits its theme colour, and the
+    standalone favicon below sets one explicitly.
+  -->
+  <g fill="none" stroke="#7c87ff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 2.5h14v17.4l-2.33 1.6-2.34-1.6-2.33 1.6-2.33-1.6-2.34 1.6L5 19.9Z" />
+    <path d="M14.4 8.4A2.6 2.6 0 0 0 12 7.2c-1.45 0-2.6.8-2.6 1.95s1.15 1.95 2.6 1.95 2.6.8 2.6 1.95-1.15 1.95-2.6 1.95a2.6 2.6 0 0 1-2.4-1.2" />
+    <path d="M12 5.6v10.8" />
+  </g>
+</svg>

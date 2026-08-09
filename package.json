@@ -1,14 +1,27 @@
 {
-  "name": "agent-spend",
-  "version": "0.1.0",
-  "description": "What your Claude Code sessions cost, where the money went, and whether you actually paid it. Local, single page, no dependencies.",
+  "name": "real-cost-of-agent",
+  "version": "0.2.0",
+  "description": "What your agent would have cost. Prices the transcripts Claude Code already writes to your disk — local, single page, zero dependencies.",
   "license": "Apache-2.0",
+  "author": "Bence Berenyi",
+  "homepage": "https://github.com/berenyibence/real-cost-of-agent#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/berenyibence/real-cost-of-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/berenyibence/real-cost-of-agent/issues"
+  },
   "keywords": [
     "claude-code",
+    "claude",
+    "anthropic",
     "tokens",
     "cost",
     "spend",
+    "pricing",
     "llm",
+    "ai-agents",
     "local-first"
   ],
   "type": "module",

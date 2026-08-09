@@ -3,15 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Spend — what your agents cost</title>
+    <title>Real Cost of Agent — what your agent would have cost</title>
+    <meta name="description" content="Prices the transcripts Claude Code already writes to your disk. Local, no account, no API key." />
     <link rel="stylesheet" href="/styles.css" />
-    <link
-      rel="icon"
-      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c87ff' stroke-width='1.8'><circle cx='12' cy='12' r='9'/><path d='M14.5 9.5A2.5 2.5 0 0 0 12 8c-1.4 0-2.5.7-2.5 2s1.1 2 2.5 2 2.5.6 2.5 2-1.1 2-2.5 2a2.5 2.5 0 0 1-2.5-1.5M12 6.5v11'/></svg>"
-    />
+    <link rel="icon" href="/brand/mark.svg" type="image/svg+xml" />
     <script>
       /* Set before first paint, so a light-theme user never sees a dark flash. */
-      const stored = localStorage.getItem('agent-spend-theme');
+      const stored = localStorage.getItem('real-cost-of-agent-theme');
       const preferred = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
       document.documentElement.dataset.theme = stored ?? preferred;
     </script>
@@ -19,11 +17,20 @@
   <body>
     <div class="page">
       <header class="page-head">
+        <!-- Inline rather than assembled in app.js: the wordmark is the first
+             thing painted, and a logo that pops in after the script has run
+             reads as a page that failed to load. -->
+        <svg class="brand-mark" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M5 2.5h14v17.4l-2.33 1.6-2.34-1.6-2.33 1.6-2.33-1.6-2.34 1.6L5 19.9Z" />
+          <path d="M14.4 8.4A2.6 2.6 0 0 0 12 7.2c-1.45 0-2.6.8-2.6 1.95s1.15 1.95 2.6 1.95 2.6.8 2.6 1.95-1.15 1.95-2.6 1.95a2.6 2.6 0 0 1-2.4-1.2" />
+          <path d="M12 5.6v10.8" />
+        </svg>
         <div>
-          <h1>Spend</h1>
-          <p id="subtitle">What it cost, what you paid, and where it went</p>
+          <h1>Real Cost of Agent</h1>
+          <p id="subtitle">What your agent would have cost</p>
         </div>
         <div class="page-actions">
+          <button id="share" class="icon-button" title="Share what this found" aria-label="Share what this found" hidden></button>
           <button id="rescan" class="icon-button" title="Re-read transcripts" aria-label="Re-read transcripts"></button>
           <button id="theme" class="icon-button" title="Switch theme" aria-label="Switch theme"></button>
         </div>

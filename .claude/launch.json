@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "agent-spend",
+      "name": "real-cost-of-agent",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["start"],
       "port": 4319

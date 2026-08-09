@@ -1,5 +1,5 @@
 /**
- * Agent Spend — the whole server.
+ * Real Cost of Agent — the whole server.
  *
  * Local by design: it binds to loopback, reads files this machine already has,
  * and makes no outbound request of any kind. There is no account, no key, and
@@ -64,8 +64,15 @@ async function readJson(req) {
  * Serve the page.
  *
  * The path is resolved and then checked to still be inside `web/`, rather than
- * being pattern-matched for `..`. Encoded traversal (`%2e%2e`) survives the
- * pattern and does not survive the check.
+ * being pattern-matched for `..`. In practice the WHATWG URL parser above has
+ * already flattened dot segments — including `%2e%2e`, which it decodes before
+ * deciding whether a segment is a double dot — so most traversal never arrives
+ * here at all.
+ *
+ * The check stays because that is a property of the parser, not of this
+ * function: resolve-then-contain is the version that keeps holding if a route
+ * is ever fed a path from somewhere other than a parsed URL, and a pattern
+ * match for `..` is the version that has to be right about every spelling.
  */
 async function serveStatic(res, pathname) {
   const rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
@@ -144,7 +151,7 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     // Nothing here is worth crashing the process over, and a page showing an
     // error is more use than a server that went away.
-    console.error('[agent-spend]', err);
+    console.error('[real-cost]', err);
     if (!res.headersSent) send(res, 500, { error: err.message });
     else res.end();
   }
@@ -158,20 +165,20 @@ server.listen(PORT, HOST, () => {
   const idx = getIndex();
   const took = Date.now() - started;
   if (!claudeCodeFound()) {
-    console.log(`[agent-spend] no Claude Code transcripts found at ${CLAUDE_DIR}`);
+    console.log(`[real-cost] no Claude Code transcripts found at ${CLAUDE_DIR}`);
   } else {
     console.log(
-      `[agent-spend] indexed ${idx.sessions.length} sessions across ${idx.workspaces.length} projects in ${took}ms`,
+      `[real-cost] indexed ${idx.sessions.length} sessions across ${idx.workspaces.length} projects in ${took}ms`,
     );
   }
-  console.log(`[agent-spend] http://${HOST}:${PORT}`);
+  console.log(`[real-cost] http://${HOST}:${PORT}`);
 });
 
 // A port already in use is the one failure worth explaining rather than
 // dumping a stack for: it is almost always a second copy of this app.
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`[agent-spend] port ${PORT} is busy. Try: PORT=4400 npm start`);
+    console.error(`[real-cost] port ${PORT} is busy. Try: PORT=4400 npm start`);
     process.exit(1);
   }
   throw err;

@@ -23,4 +23,18 @@ import os from 'node:os';
 const xdg = process.env.XDG_CONFIG_HOME;
 const base = xdg && path.isAbsolute(xdg) ? xdg : path.join(os.homedir(), '.config');
 
-export const CONFIG_DIR = path.join(base, 'agent-spend');
+export const CONFIG_DIR = path.join(base, 'real-cost-of-agent');
+
+/**
+ * Where the config lived when this project was called Agent Spend.
+ *
+ * Read as a fallback, never written. A rename that quietly resets somebody's
+ * plan is the worst kind of harmless bug: the default plan is a plausible
+ * plan rather than a blank, so the page would keep showing a confident
+ * comparison against a subscription the user is not on, and nothing on screen
+ * would suggest checking.
+ *
+ * Nothing is migrated on read. The old file is left where it is, and the first
+ * time the plan is edited the new one appears and this stops being consulted.
+ */
+export const LEGACY_CONFIG_DIR = path.join(base, 'agent-spend');
