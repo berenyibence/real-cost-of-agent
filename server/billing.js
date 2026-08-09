@@ -192,12 +192,34 @@ export function detectAuth({ refresh = false } = {}) {
  * ------------------------------------------------------------------ */
 
 /**
- * Compare what the indexed usage would cost on the API against what the
- * subscription actually costs over the same period.
+ * How far apart the two prices are: 1.15 and 0.85 bracket a band where the
+ * answer is "it makes no odds", which is a more useful thing to be told than a
+ * winner declared by four percent.
+ */
+const PLAN_AHEAD = 1.15;
+const API_AHEAD = 0.85;
+
+/**
+ * Compare **two prices, not two invoices.**
  *
- * `apiEquivalent` is the token cost already computed from real usage.
- * `firstAt`/`lastAt` bound the period so the subscription is charged for the
- * months the work actually spans, not a flat month.
+ * Worth being exact about, because an earlier version of this was not. Nothing
+ * in `~/.claude` records what anybody was charged: a transcript carries token
+ * counts and a `service_tier`, and no field anywhere names a dollar, a credit
+ * or an invoice. So both numbers here are computed, and neither is a bill:
+ *
+ * - `apiEquivalent` — the recorded tokens at published list rates.
+ * - `planCost` — the price *the user typed*, times the months the work spans.
+ *
+ * What is genuinely detectable is how Claude Code authenticates, and that says
+ * which of the two is the hypothetical one. It does not say what anyone was
+ * billed. This function used to return `apiCreditsSpent: 0` on the strength of
+ * that detection, and the page printed it in a green tick box — a dollar figure
+ * asserted from an auth heuristic, in the most confident presentation
+ * available. It is gone, and nothing here replaces it, because there is nothing
+ * on this machine that could.
+ *
+ * `firstAt`/`lastAt` bound the period so the plan is charged for the months the
+ * work actually spans rather than a flat month.
  */
 export function compareBilling({ apiEquivalent, firstAt, lastAt, config = readConfig() }) {
   const { plan, monthly } = planPrice(config);
@@ -207,30 +229,46 @@ export function compareBilling({ apiEquivalent, firstAt, lastAt, config = readCo
   const days = spanMs / 86_400_000;
   // Round up to whole months: you pay for a month even if you used four days of it.
   const months = Math.max(1, Math.ceil(days / 30.44));
-  const subscriptionCost = monthly * months;
+  const planCost = monthly * months;
 
-  const onSubscription = auth.mode === 'subscription' && plan.id !== 'none';
-  const saved = onSubscription ? apiEquivalent - subscriptionCost : 0;
-  const ratio = subscriptionCost > 0 ? apiEquivalent / subscriptionCost : null;
+  const ratio = planCost > 0 ? apiEquivalent / planCost : null;
+  const difference = planCost > 0 ? apiEquivalent - planCost : 0;
+
+  let verdict = 'unknown';
+  if (plan.id === 'none' || planCost <= 0) verdict = 'no-plan';
+  else if (apiEquivalent <= 0) verdict = 'no-usage';
+  else if (ratio >= PLAN_AHEAD) verdict = 'plan-ahead';
+  else if (ratio >= API_AHEAD) verdict = 'close';
+  else verdict = 'api-ahead';
 
   return {
     authMode: auth.mode,
     authEvidence: auth.evidence,
+    /** True when Claude Code authenticates with a key, so list rates *are* the bill. */
+    metered: auth.mode === 'api',
     plan: { id: plan.id, name: plan.name, note: plan.note, monthly },
     seats: config.seats || 1,
     months,
     days: Math.round(days),
-    // What the same tokens would cost on the API.
+    /**
+     * Whether the transcripts even cover the period being charged for.
+     *
+     * A fresh install has three days of history and gets billed for a whole
+     * month, which makes any plan look like a bad deal. The comparison is still
+     * shown — it is the honest one for the data present — but it has to say
+     * that this is what it is looking at.
+     */
+    partialPeriod: days < 21,
+    /** The recorded tokens at published list rates. */
     apiEquivalent,
-    // What the subscription costs over the same span.
-    subscriptionCost,
-    // Positive means the subscription is cheaper than metered API use.
-    saved,
-    // "Every $1 of subscription bought $N of API-rate usage."
+    /** The plan price the user entered, over the months the work spans. */
+    planCost,
+    /** Positive: the plan is behind on volume. Negative: the plan cost more than the usage. */
+    difference,
+    /** "Every $1 of plan bought $N of API-rate usage." */
     ratio,
-    // Real API credits consumed. On a subscription this is zero, and saying so
-    // plainly is the whole point of this panel.
-    apiCreditsSpent: auth.mode === 'api' ? apiEquivalent : 0,
-    onSubscription,
+    /** 'plan-ahead' | 'close' | 'api-ahead' | 'no-plan' | 'no-usage' | 'unknown' */
+    verdict,
+    onSubscription: auth.mode === 'subscription' && plan.id !== 'none',
   };
 }

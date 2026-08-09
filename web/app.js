@@ -10,6 +10,7 @@
  */
 
 import {
+  ANGLES,
   FORMATS,
   MARK_PATHS,
   cardBlob,
@@ -100,6 +101,8 @@ const ICON_PATHS = {
   plug: '<path d="M9 2v6M15 2v6"/><path d="M6 8h12v3a6 6 0 0 1-12 0V8Z"/><path d="M12 17v5"/>',
   zap: '<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11.5v4.5"/><path d="M12 8h.01"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5"/><path d="M12 16.5h.01"/>',
   refresh:
     '<path d="M20 11a8 8 0 0 0-13.7-5.4L3 9"/><path d="M4 13a8 8 0 0 0 13.7 5.4L21 15"/><path d="M3 4v5h5M21 20v-5h-5"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -160,6 +163,7 @@ const state = {
   error: null,
   share: {
     format: 'landscape',
+    angle: 'value',
     tone: 'short',
     /** `null` means "whatever the generator produced"; a string means the user edited it. */
     text: null,
@@ -211,16 +215,78 @@ async function saveBilling(patch) {
 }
 
 /* ---------------------------------------------------------------- *
- * The subscription panel
+ * Two prices, compared
  *
- * The distinction between a computed figure and money actually charged.
+ * Not two invoices — see `compareBilling`. Nothing in `~/.claude` records what
+ * anybody was charged, so this panel shows what the tokens would cost at list
+ * rates, what the plan costs over the same span, and which way the gap runs.
+ *
+ * It used to lead with a green tick and "API credits spent: $0". That figure
+ * was not measured, and could not be: it was inferred from which betas appear
+ * in local telemetry. The inference is probably right, but a dollar amount
+ * asserted in a confirmation box is a claim of a different order from "this is
+ * how you authenticate", and only the second one is on disk.
  * ---------------------------------------------------------------- */
+
+/**
+ * What to tell someone once the two prices are known.
+ *
+ * The unflattering verdict is the one that earns the rest their credibility. A
+ * tool that can only ever conclude "your subscription is great" is an
+ * advertisement, so when the volume does not justify the plan this says so, in
+ * the same voice and the same size.
+ */
+const VERDICTS = {
+  'plan-ahead': {
+    tone: 'good',
+    icon: 'check',
+    render: (b) =>
+      `<strong>The plan is ahead by ${money(b.difference)}.</strong> These tokens would cost ` +
+      `${money(b.apiEquivalent)} at published API rates, against ${money(b.planCost)} for ` +
+      `${b.plan.name} over the ${plural(b.months, 'month')} your transcripts span — so every $1 of ` +
+      `plan bought <strong>$${b.ratio.toFixed(2)}</strong> of usage at list prices.`,
+  },
+  close: {
+    tone: 'neutral',
+    icon: 'info',
+    render: (b) =>
+      `<strong>It is close to a wash.</strong> ${money(b.apiEquivalent)} of usage at list rates ` +
+      `against ${money(b.planCost)} of plan over ${plural(b.months, 'month')} — within ` +
+      `${percent(Math.abs(1 - b.ratio))} of each other. At this level of use the price is not the ` +
+      `deciding factor; rate limits and a bill that does not move are.`,
+  },
+  'api-ahead': {
+    tone: 'warn',
+    icon: 'alert',
+    render: (b) =>
+      `<strong>Metered API billing looks cheaper for you.</strong> These tokens come to ` +
+      `${money(b.apiEquivalent)} at list rates, while ${b.plan.name} costs ${money(b.planCost)} ` +
+      `over ${plural(b.months, 'month')} — <strong>${money(-b.difference)}</strong> more than the ` +
+      `usage. If your use stays at this level, an API key would bill you less. A plan also buys ` +
+      `higher rate limits and a bill that does not move, so this is an argument about volume rather ` +
+      `than the whole argument.`,
+  },
+  'no-plan': {
+    tone: 'neutral',
+    icon: 'info',
+    render: (b) =>
+      `<strong>Set a plan to make this a comparison.</strong> These tokens would cost ` +
+      `${money(b.apiEquivalent)} at published API rates. Choose what you actually pay below and ` +
+      `this becomes a number you can act on.`,
+  },
+  'no-usage': {
+    tone: 'neutral',
+    icon: 'info',
+    render: () =>
+      `<strong>Nothing priced yet.</strong> No session on this machine carries usage that could be ` +
+      `priced, so there is nothing to compare a plan against.`,
+  },
+};
 
 function billingPanel() {
   const b = state.spend.billing;
   const config = state.billing?.config;
   const plans = state.billing?.plans ?? [];
-  const subscription = b.authMode === 'subscription';
 
   const cell = (iconName, label, value, sub, color) =>
     h(
@@ -234,47 +300,63 @@ function billingPanel() {
   const grid = h(
     'div.billing-grid',
     {},
-    cell('coin', 'API-equivalent', money(b.apiEquivalent), 'what these tokens cost at list rates'),
+    cell(
+      'coin',
+      'At API list rates',
+      money(b.apiEquivalent),
+      b.metered ? 'metered, so this is your bill' : 'what these tokens would cost, metered',
+    ),
     cell(
       'plug',
-      'You actually paid',
-      subscription ? money(b.subscriptionCost) : money(b.apiCreditsSpent),
-      subscription
-        ? `${b.plan.name} · ${plural(b.months, 'month')} of use`
-        : 'metered API credits',
-      subscription ? 'var(--running)' : null,
+      'Your plan, this period',
+      b.planCost > 0 ? money(b.planCost) : '—',
+      b.planCost > 0
+        ? `${b.plan.name} · ${plural(b.months, 'month')}`
+        : 'no plan set — choose one below',
     ),
     cell(
       'zap',
-      subscription ? 'Value multiple' : 'Credits spent',
-      subscription && b.ratio ? `${b.ratio.toFixed(1)}×` : money(b.apiCreditsSpent),
-      subscription && b.ratio
-        ? `every $1 of plan bought $${b.ratio.toFixed(2)} at API rates`
-        : 'real charges against your API balance',
-      'var(--accent-text)',
+      'Ratio',
+      b.ratio ? `${b.ratio.toFixed(1)}×` : '—',
+      b.ratio
+        ? `every $1 of plan bought $${b.ratio.toFixed(2)} at list rates`
+        : 'set a plan to compare',
+      b.verdict === 'api-ahead' ? 'var(--warn)' : 'var(--accent-text)',
     ),
   );
 
-  const note =
-    subscription &&
-    h(
-      'div.billing-note',
-      {},
-      icon('check', 13),
-      h(
-        'div',
-        {
-          html:
-            '<strong>API credits spent: $0.</strong> Your usage authenticates over OAuth, so it draws ' +
-            'against plan limits rather than metered credits. The figure above is what the same work ' +
-            '<em>would</em> have cost on the API — value received, not money charged.' +
-            (b.saved > 0
-              ? ` Against a ${b.plan.name} subscription over ${plural(b.months, 'month')}, ` +
-                `that is <strong>${money(b.saved)}</strong> of usage beyond what the plan cost.`
-              : ''),
-        },
-      ),
-    );
+  const spec = VERDICTS[b.verdict] ?? VERDICTS['no-plan'];
+  const verdict = h(
+    `div.verdict.${spec.tone}`,
+    {},
+    icon(spec.icon, 13),
+    h('div', { html: spec.render(b) }),
+  );
+
+  // What the two figures are, said once, next to them rather than in a footnote
+  // nobody reaches. Both halves matter: neither number came off an invoice.
+  const authSentence =
+    b.authMode === 'subscription'
+      ? 'Claude Code authenticates over OAuth here, so this usage drew on plan limits rather than metered API billing.'
+      : b.authMode === 'api'
+        ? 'Claude Code authenticates with an API key here, so the list-rate figure is what you were actually metered.'
+        : 'How Claude Code authenticates could not be determined from local telemetry, so which side of this is hypothetical is unclear.';
+
+  const note = h(
+    'div.billing-note',
+    {},
+    h('div', {
+      html:
+        '<strong>This compares two prices, not two invoices.</strong> Nothing in ' +
+        '<code>~/.claude</code> records what you were charged — the transcripts carry token counts, ' +
+        'not dollars. The figure on the left is computed from published rates; the one beside it is ' +
+        `the price you set below. ${authSentence}` +
+        (b.partialPeriod
+          ? ` These transcripts span <strong>${plural(b.days, 'day')}</strong>, less than the month ` +
+            'the plan is charged for — so the plan side of this covers more time than the usage side.'
+          : ''),
+    }),
+  );
 
   const select = h(
     'select.select',
@@ -334,13 +416,14 @@ function billingPanel() {
       ),
   );
 
-  const hint = subscription
-    ? 'You are on a subscription'
-    : b.authMode === 'api'
-      ? 'Billing to API credits'
-      : 'Auth mode unknown';
+  const hint =
+    b.authMode === 'subscription'
+      ? 'Authenticating over OAuth'
+      : b.authMode === 'api'
+        ? 'Authenticating with an API key'
+        : 'Auth mode undetermined';
 
-  return card('Subscription vs API', hint, null, grid, note, config_);
+  return card('Plan versus list rates', hint, null, grid, verdict, note, config_);
 }
 
 /* ---------------------------------------------------------------- *
@@ -577,7 +660,7 @@ let shareBox = null;
 let shareTargetEls = [];
 
 function generatedShareText(facts) {
-  return state.share.text ?? shareText(facts, { tone: state.share.tone });
+  return state.share.text ?? shareText(facts, { tone: state.share.tone, angle: state.share.angle });
 }
 
 function setShareStatus(message, tone = 'ok') {
@@ -594,7 +677,11 @@ function setShareStatus(message, tone = 'ok') {
 function syncShare() {
   if (!shareBox) return;
   const text = shareBox.value;
-  const targets = shareTargets(shareFacts(state.spend), { short: text, long: text });
+  const targets = shareTargets(shareFacts(state.spend), {
+    short: text,
+    long: text,
+    angle: state.share.angle,
+  });
   const byId = new Map(targets.map((t) => [t.id, t]));
   for (const { id, el } of shareTargetEls) {
     const href = byId.get(id)?.href;
@@ -677,8 +764,34 @@ function sharePanel() {
   if (!shareable(state.spend)) return null;
 
   const facts = shareFacts(state.spend);
-  const spec = paintShareCard(shareCanvas, facts, { format: state.share.format });
+  const spec = paintShareCard(shareCanvas, facts, {
+    format: state.share.format,
+    angle: state.share.angle,
+  });
   shareCanvas.style.aspectRatio = `${spec.w} / ${spec.h}`;
+
+  // The angle drives the words *and* the headline on the card, so they cannot
+  // drift apart — a caption that contradicts the picture above it is the one
+  // mistake this panel exists to make impossible.
+  const angles = h(
+    'div.segmented',
+    {},
+    ...ANGLES.map((a) =>
+      h(
+        'button',
+        {
+          class: a.id === state.share.angle ? 'active' : null,
+          title: a.note,
+          onclick: () => {
+            state.share.angle = a.id;
+            state.share.text = null;
+            render();
+          },
+        },
+        a.label,
+      ),
+    ),
+  );
 
   const formats = h(
     'div.segmented',
@@ -736,7 +849,11 @@ function sharePanel() {
   });
   shareBox.value = generatedShareText(facts);
 
-  const targets = shareTargets(facts, { short: shareBox.value, long: shareBox.value });
+  const targets = shareTargets(facts, {
+    short: shareBox.value,
+    long: shareBox.value,
+    angle: state.share.angle,
+  });
   shareTargetEls = [];
 
   const buttons = targets.map((target) => {
@@ -795,7 +912,13 @@ function sharePanel() {
     h(
       'div.share-compose',
       {},
-      h('div.share-controls', {}, formats, tones),
+      h(
+        'div.share-controls',
+        {},
+        h('div.share-control', {}, h('span.share-control-label', {}, 'Angle'), angles),
+        h('div.share-control', {}, h('span.share-control-label', {}, 'Crop'), formats),
+        h('div.share-control', {}, h('span.share-control-label', {}, 'Length'), tones),
+      ),
       shareBox,
       h('div.share-meta', {}, shareCount),
       h(

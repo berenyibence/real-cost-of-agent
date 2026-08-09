@@ -55,7 +55,10 @@ test('the whole payload is finite when there is no data at all', () => {
     if (typeof value === 'number') assert.ok(Number.isFinite(value), `billing.${key} is ${value}`);
   }
   assert.ok(billing.months >= 1, 'a subscription is never charged for zero months');
-  assert.equal(billing.apiCreditsSpent, 0);
+  // Nothing to price means nothing to conclude, and in particular not that the
+  // plan is bad value — which is what a naive ratio would say about $0 of usage.
+  assert.equal(billing.verdict, 'no-usage');
+  assert.equal(billing.apiEquivalent, 0);
 });
 
 test('an empty index still serialises', () => {
