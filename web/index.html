@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spend — what your agents cost</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c87ff' stroke-width='1.8'><circle cx='12' cy='12' r='9'/><path d='M14.5 9.5A2.5 2.5 0 0 0 12 8c-1.4 0-2.5.7-2.5 2s1.1 2 2.5 2 2.5.6 2.5 2-1.1 2-2.5 2a2.5 2.5 0 0 1-2.5-1.5M12 6.5v11'/></svg>"
+    />
+    <script>
+      /* Set before first paint, so a light-theme user never sees a dark flash. */
+      const stored = localStorage.getItem('agent-spend-theme');
+      const preferred = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.dataset.theme = stored ?? preferred;
+    </script>
+  </head>
+  <body>
+    <div class="page">
+      <header class="page-head">
+        <div>
+          <h1>Spend</h1>
+          <p id="subtitle">What it cost, what you paid, and where it went</p>
+        </div>
+        <div class="page-actions">
+          <button id="rescan" class="icon-button" title="Re-read transcripts" aria-label="Re-read transcripts"></button>
+          <button id="theme" class="icon-button" title="Switch theme" aria-label="Switch theme"></button>
+        </div>
+      </header>
+      <main id="root" class="stack"></main>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

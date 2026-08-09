@@ -1,0 +1,23 @@
+{
+  "name": "agent-spend",
+  "version": "0.1.0",
+  "description": "What your Claude Code sessions cost, where the money went, and whether you actually paid it. Local, single page, no dependencies.",
+  "license": "Apache-2.0",
+  "keywords": [
+    "claude-code",
+    "tokens",
+    "cost",
+    "spend",
+    "llm",
+    "local-first"
+  ],
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test \"test/*.test.js\""
+  }
+}
