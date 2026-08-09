@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security or privacy problem
+    url: https://github.com/berenyibence/real-cost-of-agent/security/advisories/new
+    about: Report privately, not as a public issue. Anything that reads or writes outside the documented paths, or puts identifying data into a share link, belongs here.
+  - name: Question, or an idea that is not a feature request yet
+    url: https://github.com/berenyibence/real-cost-of-agent/discussions
+    about: Ask anything. "Is this number right?" is a good question and gets a real answer.

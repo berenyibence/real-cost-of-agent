@@ -1,0 +1,75 @@
+name: Bug report
+description: Something is wrong — a number, the page, or the server.
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Please do not paste raw transcript content.** It contains your prompts and your source code.
+        Session ids, token counts, model names and dollar figures are safe, and are almost always all
+        that is needed.
+
+        Anything with a security or privacy dimension goes to
+        [private reporting](https://github.com/berenyibence/real-cost-of-agent/security/advisories/new)
+        instead.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - A number is wrong
+        - The page (layout, theme, something not rendering)
+        - Sharing (the post, the image, a platform link)
+        - The server (will not start, crashes, a route errors)
+        - Scanning (sessions missing, or found that should not be)
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what you got
+      description: |
+        This is a tool about arithmetic, so please be concrete where you can. "The by-model column adds
+        up to $4 more than the headline" is a five-minute fix; "the totals look off" is a long
+        conversation.
+      placeholder: |
+        Expected: the by-project column to sum to the headline, $412.60
+        Got: it sums to $438.10, and "By day" agrees with the headline
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. node server/index.js
+        2. Open http://127.0.0.1:4319
+        3. Switch to "By project"
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: 'Run: `node --version && git rev-parse --short HEAD && uname -sm`'
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: scale
+    attributes:
+      label: Roughly how much is indexed
+      description: From the line under the title. Some bugs only appear at scale, or with one session.
+      placeholder: 340 sessions across 18 projects
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console and server output
+      description: Anything from the browser console and the terminal. Optional, but usually decisive.
+      render: shell

@@ -1,0 +1,17 @@
+# There is no formatter in this project — nothing to install, so nothing to run.
+# This is what keeps an editor from disagreeing with the files already here.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.md]
+# Trailing double-space is a line break in Markdown, and trimming it silently
+# reflows prose that was deliberately laid out.
+trim_trailing_whitespace = false
+max_line_length = 100

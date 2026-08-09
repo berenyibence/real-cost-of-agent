@@ -1,11 +1,26 @@
-# Agent Spend
+<div align="center">
 
-**What your Claude Code sessions cost, where the money went, and whether you actually paid it.**
+<img src="web/brand/mark.svg" width="72" height="72" alt="" />
 
-One local page. No account, no API key, no build step, and no dependencies — it reads the transcripts
-Claude Code already writes on your machine and prices them.
+# Real Cost of Agent
+
+**What your agent would have cost.**
+
+One local page that prices the transcripts Claude Code already writes to your disk.
+No account, no API key, no build step, no dependencies — and nothing leaves your machine.
+
+[![CI](https://github.com/berenyibence/real-cost-of-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/berenyibence/real-cost-of-agent/actions/workflows/ci.yml)
+[![Licence](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A520.11-green.svg)](https://nodejs.org)
+[![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](package.json)
+
+</div>
+
+---
 
 ```bash
+git clone https://github.com/berenyibence/real-cost-of-agent.git
+cd real-cost-of-agent
 node server/index.js
 ```
 
@@ -15,34 +30,59 @@ That is the whole setup. There is no `npm install`, because there is nothing to 
 
 ---
 
-## What you get
+## The number nobody shows you
 
-**Subscription vs API.** The same tokens mean different things on different meters, so the page
-refuses to print one number:
+Claude Code writes a transcript of every session to `~/.claude`, and every assistant reply in it
+carries the exact token counts the API measured — input, output, cache reads, cache writes, per
+model, per request. The billing was done from those numbers. Almost nobody adds them up.
+
+This does, and then refuses to print one figure, because the same tokens mean different things on
+different meters:
 
 - **Auth mode is detected, not assumed.** Claude Code records its beta set in local telemetry, and
   the presence of the OAuth beta means subscription authentication.
 - **On a subscription, API credits spent is $0** — and the page says so plainly. The token figure is
   what the work _would_ have cost on the API: value received, not money charged.
-- Set your plan, and the page compares its price over the period against the API-equivalent spend to
+- Set your plan and the page compares its price over the period against the API-equivalent spend to
   give the effective multiple. Your plan tier is not recorded anywhere on disk, and published prices
-  change — so both are editable rather than asserted as fact.
+  change, so both are editable rather than asserted as fact.
 
 **Where the money went.** The headline number is the top of a tree. Each cut re-splits the same
 dollars a different way, so a figure can be opened until it stops being a mystery:
 
-| Cut                   | Answers                                                            |
-| --------------------- | ------------------------------------------------------------------ |
-| What the tokens were  | Output, fresh input, cache reads, and 5m / 1h cache writes          |
-| By model              | Which models the money went to                                     |
-| By project            | Which codebases cost the most                                      |
-| By day                | When the spend happened                                            |
-| By session            | The individual runs that dominate                                  |
+| Cut                  | Answers                                                    |
+| -------------------- | ---------------------------------------------------------- |
+| What the tokens were | Output, fresh input, cache reads, and 5m / 1h cache writes |
+| By model             | Which models the money went to                             |
+| By project           | Which codebases cost the most                              |
+| By day               | When the spend happened                                    |
+| By session           | The individual runs that dominate                          |
 
 **What the total leaves out.** Two caveats travel with the figure rather than being buried: sessions
 priced at their tier's rate because the exact model id is not in the catalog, and sessions excluded
 entirely because no rate could be found — with the token count they represent, so you can tell a
 footnote from a hole.
+
+## Share it
+
+Most people have no idea what their agent use is worth. The page will build the post for you — a
+card image and the words to go with it — for X, Bluesky, LinkedIn, Threads, Reddit, Hacker News,
+Facebook and Instagram.
+
+Two things are true of it, and both are deliberate:
+
+- **Nothing is posted by this page.** Each button opens that platform's own composer in a new tab
+  with the text already in it. The post is still yours to edit, or to abandon. Those links are the
+  only thing in this project that points off your machine.
+- **Only aggregates can travel.** The share panel is handed a fixed set of numbers — the total, your
+  plan's name, the month count, how many sessions and projects, and the percentage split. Project
+  names, file paths and session titles are not in the data it receives, so no amount of editing can
+  put them in a post. That boundary is one function in [`web/share.js`](web/share.js), and
+  [`test/share.test.js`](test/share.test.js) asserts it against a payload seeded with paths in every
+  field that has one.
+
+The image is painted on a canvas in your browser and saved with **Download image**, at 1200×630 for
+X, LinkedIn and Facebook, or 1080×1350 and 1080×1080 for Instagram and Threads.
 
 ## Requirements
 
@@ -52,15 +92,16 @@ footnote from a hole.
 
 ## What it touches
 
-| Path                                | Access     | Why                                            |
-| ----------------------------------- | ---------- | ---------------------------------------------- |
-| `~/.claude/projects/**/*.jsonl`      | read       | token usage per request, per model             |
-| `~/.claude/telemetry/*.json`         | read       | whether you authenticate by OAuth or an API key |
-| `~/.config/agent-spend/config.json`  | read/write | your plan, its price, and seat count            |
+| Path                                        | Access     | Why                                             |
+| ------------------------------------------- | ---------- | ----------------------------------------------- |
+| `~/.claude/projects/**/*.jsonl`             | read       | token usage per request, per model              |
+| `~/.claude/telemetry/*.json`                | read       | whether you authenticate by OAuth or an API key |
+| `~/.config/real-cost-of-agent/config.json`  | read/write | your plan, its price, and seat count            |
 
 **Nothing leaves your machine.** The server binds to loopback and makes no outbound request of any
 kind — the only HTTP traffic is your browser talking to `127.0.0.1`. If the page is showing a number,
-it came off your own disk.
+it came off your own disk. The share links are the single exception, and they are exactly that:
+links, which do nothing until you click one.
 
 ## Configuration
 
@@ -95,7 +136,8 @@ taken by the thing that was billed, not an estimate made afterwards by counting 
   is not an option here.
 
 Prices change. Edit the `CATALOG` in `server/models.js` when they do — it is a plain object, and the
-tests will tell you if you break the arithmetic.
+tests will tell you if you break the arithmetic. That is [the most useful pull request you can
+send](CONTRIBUTING.md#the-most-useful-contribution).
 
 ## Tests
 
@@ -104,10 +146,10 @@ npm test
 ```
 
 Node's built-in runner, no framework. The suite covers the pricing rules, the plan arithmetic, the
-config sanitiser, and an end-to-end pass over a fixture transcript. The property that matters most is
-asserted directly: **every breakdown adds up to the same total.** A column that quietly uses
-different arithmetic from the number above it is the worst way for a money view to be wrong, because
-nothing on screen suggests you should check.
+config sanitiser, the share boundary, and an end-to-end pass over a fixture transcript. The property
+that matters most is asserted directly: **every breakdown adds up to the same total.** A column that
+quietly uses different arithmetic from the number above it is the worst way for a money view to be
+wrong, because nothing on screen suggests you should check.
 
 ## Layout
 
@@ -124,9 +166,25 @@ server/
 web/
   index.html  the page
   app.js      the page's behaviour — plain DOM, no framework
+  share.js    the share card: the aggregate allowlist, the words, the canvas
   styles.css  design tokens and components, light and dark
+  brand/      the mark, the lockup, and the repository's social preview
 ```
+
+## Contributing
+
+Yes, please — start with [CONTRIBUTING.md](CONTRIBUTING.md). Model prices move constantly and a
+one-line catalog update is a genuinely valuable pull request. The house rules that matter most are
+short: no dependencies, no build step, no network calls, and every breakdown has to add up.
+
+By taking part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md). To report a security issue,
+see [SECURITY.md](SECURITY.md).
 
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+**Not affiliated with Anthropic.** Claude and Claude Code are trademarks of Anthropic. This is an
+independent tool that reads files Claude Code writes locally, and the prices in it are a
+hand-maintained copy of published rates — always check your real invoice before treating any figure
+here as authoritative.

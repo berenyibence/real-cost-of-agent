@@ -1,0 +1,62 @@
+name: A price or model is out of date
+description: A rate has changed, or a model is missing from the catalog. The most useful report there is.
+title: 'catalog: '
+labels: ['catalog', 'good first issue']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Prices move and models ship without telling this catalog. Reporting one is genuinely useful,
+        and **fixing one is a five-line pull request** — see
+        [CONTRIBUTING.md](https://github.com/berenyibence/real-cost-of-agent/blob/main/CONTRIBUTING.md#the-most-useful-contribution)
+        if you would rather just send it.
+
+  - type: input
+    id: model
+    attributes:
+      label: Model id
+      description: Exactly as it appears in the transcript or in the API docs.
+      placeholder: claude-opus-5
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is wrong
+      options:
+        - The published rate has changed
+        - This model is missing from the catalog entirely
+        - The tier is inferred wrongly (it is being priced as the wrong class)
+        - The context window is wrong
+    validations:
+      required: true
+
+  - type: textarea
+    id: rates
+    attributes:
+      label: The correct rates
+      description: USD per million tokens, first-party Anthropic API. Leave out anything you are unsure of.
+      placeholder: |
+        input:  5.00
+        output: 25.00
+        context window: 200000
+    validations:
+      required: true
+
+  - type: input
+    id: source
+    attributes:
+      label: Where it is published
+      description: A link to the pricing or model page. This is the part that makes the change safe to merge.
+      placeholder: https://...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: promo
+    attributes:
+      label: One check
+      options:
+        - label: This is a list rate, not a promotional or time-limited price. (A promotion applies to one named model for one stated period — it is not a rate this catalog can carry.)
+          required: true

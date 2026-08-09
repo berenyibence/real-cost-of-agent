@@ -1,0 +1,84 @@
+# The whole build. There is nothing to install, so there is nothing to cache and
+# no lockfile to restore — `npm ci` would fail here, and correctly so.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test · node ${{ matrix.node }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20.11 is the floor `engines` claims, so it is tested rather than
+        # assumed. Windows is here because `server/paths.js` and `server/day.js`
+        # both do things that are quietly platform-specific.
+        os: [ubuntu-latest, windows-latest]
+        node: ['20.11', '22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: No dependencies, and it stays that way
+        shell: bash
+        run: |
+          if node -e "const p=require('./package.json');process.exit(Object.keys(p.dependencies??{}).length+Object.keys(p.devDependencies??{}).length?1:0)"; then
+            echo "package.json declares no dependencies"
+          else
+            echo "::error file=package.json::This project ships zero dependencies. See CONTRIBUTING.md."
+            exit 1
+          fi
+
+      - run: npm test
+
+  smoke:
+    name: it starts, serves, and finds nothing gracefully
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # A machine with no transcripts is the first thing a new contributor sees,
+      # and it is the state CI is always in — so it is the state worth smoking.
+      - name: Boot against an empty CLAUDE_HOME and hit every route
+        run: |
+          mkdir -p /tmp/empty-claude
+          CLAUDE_HOME=/tmp/empty-claude XDG_CONFIG_HOME=/tmp/cfg node server/index.js &
+          server=$!
+          for i in $(seq 1 40); do
+            curl -fsS http://127.0.0.1:4319/api/spend >/dev/null 2>&1 && break
+            sleep 0.25
+          done
+          set -e
+          curl -fsS http://127.0.0.1:4319/api/spend   | head -c 400; echo
+          curl -fsS http://127.0.0.1:4319/api/billing | head -c 400; echo
+          curl -fsS http://127.0.0.1:4319/            > /dev/null
+          curl -fsS http://127.0.0.1:4319/app.js      > /dev/null
+          curl -fsS http://127.0.0.1:4319/share.js    > /dev/null
+          curl -fsS http://127.0.0.1:4319/brand/mark.svg > /dev/null
+          # Nothing outside web/ is served, in either spelling. Both currently
+          # 404: the WHATWG URL parser resolves dot segments, and treats %2e as
+          # a dot while doing it, so neither reaches the containment check in
+          # serveStatic. The assertion is on the property that matters — no 200,
+          # and no package.json on the wire — rather than on which of the two
+          # layers happened to catch it, so a change to either is still caught.
+          for path in /../package.json /%2e%2e/package.json /..%2fpackage.json; do
+            code=$(curl -s -o /tmp/body -w '%{http_code}' --path-as-is "http://127.0.0.1:4319$path")
+            echo "$path -> $code"
+            test "$code" != 200
+            grep -q 'real-cost-of-agent' /tmp/body && { echo "::error::served $path"; exit 1; } || true
+          done
+          kill $server

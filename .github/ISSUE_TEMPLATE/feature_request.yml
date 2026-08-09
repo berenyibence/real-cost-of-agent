@@ -1,0 +1,53 @@
+name: Feature request
+description: Something this should do and does not.
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing, the four constraints that decide most of these:
+
+        - **No dependencies, no build step.** `node server/index.js` and nothing else, forever.
+        - **No network calls.** Nothing in this repository opens an outbound socket.
+        - **Every breakdown sums to the total.** A new cut of the data has to re-split the same dollars.
+        - **`~/.claude` is read-only.** One file is written, and it holds three numbers.
+
+        A feature that needs one of these relaxed is not automatically a no, but it is a conversation
+        rather than a pull request. Say why it is worth it.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to find out?
+      description: The question you have about your own usage that the page will not answer today.
+      placeholder: Which of my projects got more expensive after I switched models, and by how much.
+    validations:
+      required: true
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: What would it look like?
+      description: A new cut? A column? A different comparison? A rough sketch in words is plenty.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: constraints
+    attributes:
+      label: Does this need any of the constraints above relaxed?
+      options:
+        - 'No — it works within all four'
+        - 'It would need a dependency'
+        - 'It would need a network call'
+        - 'It would need to write somewhere new'
+        - 'Not sure'
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Optional
+      options:
+        - label: I would be willing to have a go at implementing this.

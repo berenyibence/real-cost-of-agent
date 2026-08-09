@@ -1,7 +1,7 @@
-# Agent Spend — notes for agents
+# Real Cost of Agent — notes for agents
 
-A single local page that prices Claude Code's own transcripts. One HTTP server, one page, **zero
-dependencies**, no build step, no bundler, no framework.
+A single local page that prices Claude Code's own transcripts, and will build the post about it. One
+HTTP server, one page, **zero dependencies**, no build step, no bundler, no framework.
 
 ## Run it
 
@@ -33,6 +33,8 @@ To see a change, restart the server (there is no watcher for its own source) and
 | `server/spend.js`   | `spendBreakdown` — one set of dollars split five ways                     |
 | `server/billing.js` | plans, config sanitising, OAuth-vs-API detection, the comparison          |
 | `web/app.js`        | the page. `h()` builds DOM; `render()` rebuilds it from `state`           |
+| `web/share.js`      | the share card: the aggregate allowlist, the post text, the canvas        |
+| `web/brand/`        | the mark, the lockup, and the repository's social preview                 |
 
 The layering is worth preserving: `scan.js` is the only module that parses vendor JSON, and
 `models.js`/`spend.js` are pure arithmetic over normalized numbers. Adding a second agent's
@@ -55,9 +57,17 @@ transcripts should mean writing one new scanner, not touching the pricing.
 6. **Days are local days** (`server/day.js`). `toISOString().slice(0, 10)` files an evening session
    under tomorrow east of Greenwich.
 7. **No network calls, ever.** Nothing in this repo opens a socket outbound, and the README promises
-   that. It is not a detail to trade away for a feature.
-8. **Only one file is ever written**: `~/.config/agent-spend/config.json`. `~/.claude` is read-only
-   here — it belongs to Claude Code.
+   that. It is not a detail to trade away for a feature. The share panel's platform links are the one
+   thing pointing off-machine, and they are `href`s a person clicks — no `fetch`, no beacon, no remote
+   font, no CDN script, no analytics, and no platform logos fetched from anywhere.
+8. **Only one file is ever written**: `~/.config/real-cost-of-agent/config.json`. `~/.claude` is
+   read-only here — it belongs to Claude Code. The pre-rename `~/.config/agent-spend/config.json` is
+   still _read_ as a fallback, and must never be written.
+9. **Nothing identifying leaves the share panel.** `shareFacts` in `web/share.js` is an allowlist of
+   aggregates, deliberately an allowlist rather than a redaction pass — a new field on `/api/spend`
+   should have to be invited into a post rather than arrive in one by default. Project names, paths
+   and session titles are not in the shape it returns. `test/share.test.js` asserts this against a
+   payload seeded with paths in every field that has one; extend that test when the shape changes.
 
 ## Common changes
 
@@ -71,6 +81,12 @@ several seat counts, so a malformed entry fails immediately.
 **A new cut of the data.** Add the bucket in `spendBreakdown` (`server/spend.js`), then a `CUTS`
 entry and a renderer in `web/app.js`. The new bucket must sum to `total` — add it to the loop in
 `test/spend.test.js` that asserts exactly that.
+
+**A new share platform.** Add it to `shareTargets` in `web/share.js` with an honest `prefills` flag,
+and a `note` if it cannot take the text (Facebook and Instagram cannot). Add its host to the
+assertion in `test/share.test.js`. Use a text label, never the platform's logo — a remote logo is a
+network request this project does not make, and a bundled one ships somebody else's trademark under
+our licence.
 
 **Anything about the page.** `web/app.js` has no framework by design. `h('div.card', props, children)`
 is the only builder; `render()` replaces the contents of `#root` wholesale. Do not introduce React,
