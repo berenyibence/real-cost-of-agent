@@ -102,6 +102,8 @@ const ICON_PATHS = {
   zap: '<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11.5v4.5"/><path d="M12 8h.01"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
   alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5"/><path d="M12 16.5h.01"/>',
   refresh:
     '<path d="M20 11a8 8 0 0 0-13.7-5.4L3 9"/><path d="M4 13a8 8 0 0 0 13.7 5.4L21 15"/><path d="M3 4v5h5M21 20v-5h-5"/>',
@@ -243,15 +245,15 @@ const VERDICTS = {
     render: (b) =>
       `<strong>The plan is ahead by ${money(b.difference)}.</strong> These tokens would cost ` +
       `${money(b.apiEquivalent)} at published API rates, against ${money(b.planCost)} for ` +
-      `${b.plan.name} over the ${plural(b.months, 'month')} your transcripts span — so every $1 of ` +
-      `plan bought <strong>$${b.ratio.toFixed(2)}</strong> of usage at list prices.`,
+      `${b.planLabel} over ${plural(b.declaredMonths, 'month')} — so every $1 of plan bought ` +
+      `<strong>$${b.ratio.toFixed(2)}</strong> of usage at list prices.`,
   },
   close: {
     tone: 'neutral',
     icon: 'info',
     render: (b) =>
       `<strong>It is close to a wash.</strong> ${money(b.apiEquivalent)} of usage at list rates ` +
-      `against ${money(b.planCost)} of plan over ${plural(b.months, 'month')} — within ` +
+      `against ${money(b.planCost)} of plan over ${plural(b.declaredMonths, 'month')} — within ` +
       `${percent(Math.abs(1 - b.ratio))} of each other. At this level of use the price is not the ` +
       `deciding factor; rate limits and a bill that does not move are.`,
   },
@@ -260,8 +262,8 @@ const VERDICTS = {
     icon: 'alert',
     render: (b) =>
       `<strong>Metered API billing looks cheaper for you.</strong> These tokens come to ` +
-      `${money(b.apiEquivalent)} at list rates, while ${b.plan.name} costs ${money(b.planCost)} ` +
-      `over ${plural(b.months, 'month')} — <strong>${money(-b.difference)}</strong> more than the ` +
+      `${money(b.apiEquivalent)} at list rates, while ${b.planLabel} costs ${money(b.planCost)} ` +
+      `over ${plural(b.declaredMonths, 'month')} — <strong>${money(-b.difference)}</strong> more than the ` +
       `usage. If your use stays at this level, an API key would bill you less. A plan also buys ` +
       `higher rate limits and a bill that does not move, so this is an argument about volume rather ` +
       `than the whole argument.`,
@@ -311,7 +313,7 @@ function billingPanel() {
       'Your plan, this period',
       b.planCost > 0 ? money(b.planCost) : '—',
       b.planCost > 0
-        ? `${b.plan.name} · ${plural(b.months, 'month')}`
+        ? `${b.planLabel} · ${plural(b.declaredMonths, 'month')}`
         : 'no plan set — choose one below',
     ),
     cell(
@@ -351,41 +353,94 @@ function billingPanel() {
         '<code>~/.claude</code> records what you were charged — the transcripts carry token counts, ' +
         'not dollars. The figure on the left is computed from published rates; the one beside it is ' +
         `the price you set below. ${authSentence}` +
-        (b.partialPeriod
-          ? ` These transcripts span <strong>${plural(b.days, 'day')}</strong>, less than the month ` +
-            'the plan is charged for — so the plan side of this covers more time than the usage side.'
-          : ''),
+        // Two different ways the two sides can cover different stretches of
+        // time. Both are ordinary; neither should have to be worked out from
+        // the numbers by a reader who was not looking for it.
+        (b.spanMismatch
+          ? ` The plan below covers <strong>${plural(b.declaredMonths, 'month')}</strong> while the ` +
+            `transcripts here span <strong>${plural(b.months, 'month')}</strong>, so the two sides ` +
+            'are measuring different stretches of time.'
+          : b.partialPeriod
+            ? ` These transcripts span <strong>${plural(b.days, 'day')}</strong>, less than the month ` +
+              'the plan is charged for — so the plan side of this covers more time than the usage side.'
+            : ''),
     }),
   );
 
-  const select = h(
-    'select.select',
-    {
-      onchange: (e) => saveBilling({ planId: e.target.value, monthlyOverride: null }),
-    },
-    ...plans.map((p) =>
-      h(
-        'option',
-        { value: p.id, selected: config?.planId === p.id },
-        `${p.name}${p.monthly ? ` — $${p.monthly}/mo` : ''}`,
-      ),
-    ),
-  );
+  /* ---- the plan editor: one row per period ---- */
 
-  const number = (label, value, placeholder, onblur) =>
+  const periods = config?.periods ?? [];
+  const savePeriods = (next) => saveBilling({ periods: next });
+  const patchPeriod = (index, patch) =>
+    savePeriods(periods.map((p, i) => (i === index ? { ...p, ...patch } : p)));
+
+  /**
+   * A committed number, not a live one.
+   *
+   * `render()` rebuilds the panel from the response, so saving per keystroke
+   * would take the caret out of the box being typed in — and "2" on the way to
+   * "24" is a real value that would be stored and priced on the way past.
+   */
+  const number = (label, value, placeholder, min, commit) =>
     h(
       'label.search',
       {},
       h('span.faint', { style: { fontSize: '11px' } }, label),
       h('input', {
         type: 'number',
-        min: label === 'seats' ? '1' : '0',
+        min,
         placeholder,
         value: value ?? '',
-        onblur,
+        onblur: (e) => commit(e.target.value === '' ? null : Number(e.target.value)),
+        onkeydown: (e) => {
+          if (e.key === 'Enter') e.target.blur();
+        },
       }),
     );
 
+  const rows = periods.map((period, index) => {
+    const listPrice = plans.find((p) => p.id === period.planId)?.monthly ?? 0;
+    const only = periods.length < 2;
+    return h(
+      'div.period-row',
+      {},
+      h(
+        'select.select',
+        { onchange: (e) => patchPeriod(index, { planId: e.target.value, monthlyOverride: null }) },
+        ...plans.map((p) =>
+          h(
+            'option',
+            { value: p.id, selected: period.planId === p.id },
+            `${p.name}${p.monthly ? ` — $${p.monthly}/mo` : ''}`,
+          ),
+        ),
+      ),
+      number('$/mo', period.monthlyOverride, String(listPrice), '0', (v) =>
+        patchPeriod(index, { monthlyOverride: v }),
+      ),
+      number('seats', period.seats ?? 1, '1', '1', (v) =>
+        patchPeriod(index, { seats: Math.max(1, v ?? 1) }),
+      ),
+      // Empty means "however long the transcripts run", which is the answer for
+      // anyone who has not changed tier. The placeholder says what that is, so
+      // an empty box is never a mystery.
+      number('months', period.months, `${b.months} detected`, '1', (v) =>
+        patchPeriod(index, { months: v }),
+      ),
+      h(
+        'button.period-remove',
+        {
+          disabled: only,
+          'aria-label': 'Remove this period',
+          title: only ? 'At least one period is needed' : 'Remove this period',
+          onclick: () => savePeriods(periods.filter((_, i) => i !== index)),
+        },
+        icon('close', 14),
+      ),
+    );
+  });
+
+  const priced = b.periods ?? [];
   const config_ = h(
     'div.billing-config',
     {},
@@ -393,25 +448,40 @@ function billingPanel() {
       'span.faint',
       { style: { fontSize: '11.5px' } },
       'Plan tier is not recorded anywhere on disk, so set it here. Prices are editable — published ' +
-        'pricing changes and this app will not show a stale figure as fact.',
+        'pricing changes and this app will not show a stale figure as fact. Add a period for each ' +
+        'tier you have been on, and set its length when the transcripts here do not cover it.',
     ),
+    h('div.periods', {}, ...rows),
     h(
-      'div.billing-controls',
+      'div.periods-foot',
       {},
-      select,
-      number('$/mo', config?.monthlyOverride, 'override', (e) =>
-        saveBilling({ monthlyOverride: e.target.value === '' ? null : Number(e.target.value) }),
+      h(
+        'button.action',
+        {
+          onclick: () =>
+            savePeriods([
+              ...periods,
+              // Same tier, one month: a starting point to edit rather than a
+              // guess about which plan somebody moved to.
+              { ...(periods[periods.length - 1] ?? {}), months: 1 },
+            ]),
+        },
+        icon('plus', 14),
+        'Add a period',
       ),
-      number('seats', config?.seats ?? 1, '1', (e) =>
-        saveBilling({ seats: Math.max(1, Number(e.target.value) || 1) }),
-      ),
+      priced.length > 1 &&
+        h(
+          'span.periods-total',
+          {},
+          `${plural(priced.length, 'period')} · ${money(b.planCost)} over ${plural(b.declaredMonths, 'month')}`,
+        ),
       state.saving && h('span.faint', { style: { fontSize: '11px' } }, 'saving…'),
       !state.saving && state.saved && h('span.faint', { style: { fontSize: '11px' } }, 'saved'),
     ),
     b.authEvidence &&
       h(
         'div.faint.mono',
-        { style: { fontSize: '10.5px', marginTop: '8px' } },
+        { style: { fontSize: '10.5px', marginTop: '10px' } },
         `detection: ${b.authEvidence}`,
       ),
   );

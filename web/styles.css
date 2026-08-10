@@ -584,20 +584,76 @@ input {
   padding: 14px 16px;
 }
 
-.billing-controls {
-  display: flex;
+/* ---- the plan, as a period per row ---- */
+
+.periods {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* The tier is the wide one; the three numbers are the same width as each other
+   so the columns line up down the list and can be compared at a glance. */
+.period-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.6fr) repeat(3, minmax(96px, 0.7fr)) auto;
   gap: 8px;
   align-items: center;
+}
+
+.period-row .search input {
+  width: 100%;
+  min-width: 0;
+}
+
+.period-remove {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-faint);
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.period-remove:hover:not(:disabled) {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+/* One period is always required, so the button stays in place and explains
+   itself rather than vanishing and reflowing the row it was in. */
+.period-remove:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.periods-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
-.billing-controls .search {
-  min-width: 150px;
+.periods-total {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
-.billing-controls .search input {
-  width: 60px;
+@media (max-width: 720px) {
+  /* Below this the five columns are each too narrow to type in. The tier takes
+     a line of its own and the numbers share the next. */
+  .period-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  }
+
+  .period-row > .select {
+    grid-column: 1 / -1;
+  }
 }
 
 /* ---- caveats that travel with the total ---- */

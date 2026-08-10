@@ -107,6 +107,9 @@ export function shareFacts(spend) {
   const hasPlan = planCost > 0;
   const ratio = finite(billing.ratio);
   const months = Math.max(1, Math.round(finite(billing.months)) || 1);
+  // The months the *plan* is declared for, which is the user's to state and is
+  // not always the span of the transcripts on this machine.
+  const planMonths = Math.max(1, Math.round(finite(billing.declaredMonths)) || months);
 
   return {
     total,
@@ -114,12 +117,15 @@ export function shareFacts(spend) {
     hasPlan,
     /** Authenticating with an API key, so list rates are the actual bill. */
     metered: billing.metered === true,
-    /** A product name, e.g. "Claude Max 20×". Never a project or a path. */
-    planName: hasPlan ? String(billing.plan?.name ?? '') : null,
-    /** What the plan costs over the months the transcripts span. */
+    /** Product names, e.g. "Claude Max 20×" or "Claude Pro + Claude Max 20×". */
+    planName: hasPlan ? String(billing.planLabel ?? billing.plan?.name ?? '') : null,
+    /** How many tiers the history covers, so an average can say that it is one. */
+    planPeriods: Math.max(1, (billing.periods ?? []).length),
+    /** What the plan cost across every period declared. */
     planCost,
-    /** What the plan costs per month, which is the figure people actually know. */
-    planMonthly: months > 0 ? planCost / months : 0,
+    planMonths,
+    /** Per month — the figure people actually know, blended across periods. */
+    planMonthly: planMonths > 0 ? planCost / planMonths : 0,
     /**
      * Signed, and that is the point. Positive is usage the plan did not charge
      * for; negative is a plan that cost more than the work was worth. A share
@@ -151,7 +157,7 @@ export function shareable(spend) {
 /** The clause naming the plan, which is what makes the number mean anything. */
 function planClause(f) {
   const on = f.planName ? ` on ${f.planName}` : '';
-  return `${dollars(f.planCost)}${on} over ${plural(f.months, 'month')}`;
+  return `${dollars(f.planCost)}${on} over ${plural(f.planMonths, 'month')}`;
 }
 
 /** The gap, said in whichever direction it actually runs. */
@@ -237,7 +243,10 @@ export const ANGLES = [
     caption: (f) => {
       if (!f.hasPlan) return `${plural(f.months, 'month')} of transcripts, priced at published rates.`;
       if (behind(f)) return `Metered would bill me ${dollars(-f.saved / f.months)} a month less at this rate of use.`;
-      return `Against ${dollars(f.planMonthly)}/mo of ${f.planName}. Same work, ${f.ratio.toFixed(1)}× the price.`;
+      // Several tiers blend into an average, and calling it one flat price
+      // would be a number the reader could not find on any invoice.
+      const rate = f.planPeriods > 1 ? `${dollars(f.planMonthly)}/mo on average` : `${dollars(f.planMonthly)}/mo`;
+      return `Against ${rate} of ${f.planName}. Same work, ${f.ratio.toFixed(1)}× the price.`;
     },
   },
   {
@@ -297,7 +306,7 @@ export function subhead(f, angle = 'value', { compact = false } = {}) {
   }
 
   return f.hasPlan
-    ? `${dollars(f.total)} at API list rates over ${plural(f.months, 'month')}${against}.${scale}`
+    ? `${dollars(f.total)} at API list rates over ${plural(f.planMonths, 'month')}${against}.${scale}`
     : `${dollars(f.total)} at API list rates.${scale}`;
 }
 

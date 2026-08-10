@@ -69,7 +69,11 @@ const payload = {
     authEvidence: 'oauth beta present in 44 of 60 sampled telemetry events',
     metered: false,
     plan: { id: 'max20', name: 'Claude Max 20×', monthly: 200 },
+    planLabel: 'Claude Max 20×',
+    periods: [{ planId: 'max20', planName: 'Claude Max 20×', monthly: 200, months: 3, cost: 600 }],
     months: 3,
+    declaredMonths: 3,
+    spanMismatch: false,
     apiEquivalent: 1284.42,
     planCost: 600,
     difference: 684.42,
@@ -130,7 +134,9 @@ test('the facts are an allowlist, so a new spend field is not shared by accident
       'perMonth',
       'planCost',
       'planMonthly',
+      'planMonths',
       'planName',
+      'planPeriods',
       'projects',
       'ratio',
       'saved',
@@ -241,6 +247,47 @@ test('with no plan set, nothing is claimed about one', () => {
     assert.equal(/plan cost|of plan|my plan/i.test(text), false, `angle "${id}": ${text}`);
     assert.equal(text.includes('NaN'), false, text);
     assert.equal(text.includes('undefined'), false, text);
+  }
+});
+
+test('a plan history is posted as the history it was, not as one flat tier', () => {
+  // Two months of Pro then three of Max is $640 over five months. Naming only
+  // the first tier would misdescribe most of the money, and quoting $128/mo
+  // without saying it is an average gives a figure that is on nobody's invoice.
+  const f = shareFacts({
+    ...payload,
+    billing: {
+      ...payload.billing,
+      planLabel: 'Claude Pro + Claude Max 20×',
+      periods: [
+        { planId: 'pro', planName: 'Claude Pro', monthly: 20, months: 2, cost: 40 },
+        { planId: 'max20', planName: 'Claude Max 20×', monthly: 200, months: 3, cost: 600 },
+      ],
+      months: 3,
+      declaredMonths: 5,
+      spanMismatch: true,
+      planCost: 640,
+      difference: 644.42,
+      ratio: 2.0069,
+    },
+  });
+
+  assert.equal(f.planName, 'Claude Pro + Claude Max 20×');
+  assert.equal(f.planPeriods, 2);
+  assert.equal(f.planMonths, 5, 'the plan spans five months');
+  assert.equal(f.months, 3, 'the transcripts span three');
+  assert.equal(f.planMonthly, 128);
+
+  // The plan clause counts the declared months, not the transcript span.
+  assert.match(imageCaption(f, 'value'), /over 5 months/);
+  assert.match(imageCaption(f, 'runrate'), /on average/);
+  // And the run rate still divides by the months of work that actually happened.
+  assert.equal(Math.round(f.perMonth), 428);
+
+  for (const { id } of ANGLES) {
+    const text = shareText(f, { tone: 'short', angle: id });
+    assert.ok(text.length <= 280, `angle "${id}" ran to ${text.length}:\n${text}`);
+    assert.equal(text.includes('NaN'), false, text);
   }
 });
 
