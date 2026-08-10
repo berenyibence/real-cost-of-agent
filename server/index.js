@@ -122,10 +122,14 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/billing' && req.method === 'POST') {
       const body = await readJson(req);
+      // `periods` replaces the list; the flat fields still edit the first
+      // period, so a one-plan caller written against the old endpoint works.
       const config = await writeConfig({
+        periods: body.periods,
         planId: body.planId,
         monthlyOverride: body.monthlyOverride,
         seats: body.seats,
+        months: body.months,
       });
       return send(res, 200, { ok: true, config });
     }

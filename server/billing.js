@@ -39,14 +39,34 @@ export const PLANS = [
   { id: 'custom', name: 'Custom', monthly: 0, note: 'Set your own monthly figure.' },
 ];
 
-const DEFAULT_CONFIG = {
+const DEFAULT_PERIOD = {
   planId: 'max20',
   monthlyOverride: null,
   seats: 1,
+  /**
+   * `null` means "however long the transcripts on this machine span".
+   *
+   * A number means the user knows better than the transcripts do, which is the
+   * common case as soon as the history is incomplete: you have been paying for
+   * eight months and this laptop has three of them on disk.
+   */
+  months: null,
 };
 
 /**
- * Force a config into a shape the arithmetic downstream can survive.
+ * Somebody who has changed tier twice has three periods. Twenty-four is well
+ * past any real billing history and stops a malformed file turning into a page
+ * with ten thousand rows on it.
+ */
+const MAX_PERIODS = 24;
+
+/** Fifty years. A typo in a months box should not produce a six-figure plan. */
+const MAX_MONTHS = 600;
+
+const DEFAULT_CONFIG = { periods: [{ ...DEFAULT_PERIOD }] };
+
+/**
+ * Force one period into a shape the arithmetic downstream can survive.
  *
  * Applied on the way in *and* on the way out, because there are two ways
  * nonsense arrives: a request body, and a file on disk that someone edited by
@@ -59,23 +79,54 @@ const DEFAULT_CONFIG = {
  * preference, not a transaction: the useful behaviour when the stored plan no
  * longer exists is to show a sensible one, not to break the page.
  */
-export function sanitizeConfig(raw) {
-  const config = { ...DEFAULT_CONFIG };
-  if (!raw || typeof raw !== 'object') return config;
+export function sanitizePeriod(raw) {
+  const period = { ...DEFAULT_PERIOD };
+  if (!raw || typeof raw !== 'object') return period;
 
-  if (PLANS.some((p) => p.id === raw.planId)) config.planId = raw.planId;
+  if (PLANS.some((p) => p.id === raw.planId)) period.planId = raw.planId;
 
   // Explicit null means "use the plan's own price", which is different from an
   // unparseable value and has to survive.
   if (raw.monthlyOverride != null) {
     const monthly = Number(raw.monthlyOverride);
-    if (Number.isFinite(monthly) && monthly >= 0) config.monthlyOverride = monthly;
+    if (Number.isFinite(monthly) && monthly >= 0) period.monthlyOverride = monthly;
   }
 
   const seats = Number(raw.seats);
-  if (Number.isFinite(seats) && seats >= 1) config.seats = Math.floor(seats);
+  if (Number.isFinite(seats) && seats >= 1) period.seats = Math.floor(seats);
 
-  return config;
+  // Same distinction again: null is "ask the transcripts", not "unparseable".
+  if (raw.months != null) {
+    const months = Number(raw.months);
+    if (Number.isFinite(months) && months >= 1) {
+      period.months = Math.min(Math.floor(months), MAX_MONTHS);
+    }
+  }
+
+  return period;
+}
+
+/**
+ * Force a whole config into shape.
+ *
+ * A config is a **list of periods**, because a year on one tier is not what most
+ * people's billing history looks like: two months of Pro and then three of Max
+ * is one plan cost, not an average of two prices. One period is always present —
+ * the list is never empty, so the page never has to render a plan editor with
+ * nothing in it.
+ *
+ * The pre-0.4 shape was a single flat plan. It is read as a one-period list
+ * rather than discarded, so an existing config survives the change.
+ */
+export function sanitizeConfig(raw) {
+  if (!raw || typeof raw !== 'object') return { periods: [sanitizePeriod(null)] };
+
+  if (Array.isArray(raw.periods)) {
+    const periods = raw.periods.slice(0, MAX_PERIODS).map(sanitizePeriod);
+    return { periods: periods.length ? periods : [sanitizePeriod(null)] };
+  }
+
+  return { periods: [sanitizePeriod(raw)] };
 }
 
 /** The stored preferences, falling back to the pre-rename location before the defaults. */
@@ -87,28 +138,35 @@ export function readConfig() {
       /* absent or unparseable — try the next, then the defaults */
     }
   }
-  return { ...DEFAULT_CONFIG };
+  return sanitizeConfig(null);
 }
 
 /**
  * What the config becomes when a patch lands on it.
  *
- * `undefined` means "not in this patch" and is dropped before the merge. A
- * plain spread does not make that distinction, and the endpoint names every
- * field on every request — so a request that only meant to change the plan
- * would also blank the seat count back to its default.
+ * A patch carrying `periods` **replaces** them. A list cannot be field-merged
+ * without inventing a rule for which row a value belongs to, and the editor
+ * always knows the whole list it is asking for.
  *
- * `null` is left alone: `monthlyOverride: null` is a real value meaning "use
- * the plan's own price", and is not the same as declining to say.
- *
- * Pure, and separate from the write, so the rule can be tested without a real
- * path under `~/.config`.
+ * A patch carrying plain fields edits the **first** period instead. That is what
+ * the pre-0.4 endpoint did, and what somebody scripting `{"planId": "pro"}`
+ * against a one-plan config still means. `undefined` is dropped before that
+ * merge — a plain spread does not distinguish it from an explicit value, and the
+ * page names several fields per request, so a change of plan would otherwise
+ * blank the seat count back to its default. `null` survives, because
+ * `monthlyOverride: null` and `months: null` are both real values.
  */
 export function mergeConfig(current, patch) {
+  const base = sanitizeConfig(current);
+  if (!patch || typeof patch !== 'object') return base;
+  if (Array.isArray(patch.periods)) return sanitizeConfig({ periods: patch.periods });
+
   const given = Object.fromEntries(
-    Object.entries(patch ?? {}).filter(([, value]) => value !== undefined),
+    Object.entries(patch).filter(([, value]) => value !== undefined),
   );
-  return sanitizeConfig({ ...current, ...given });
+  const periods = base.periods.slice();
+  periods[0] = sanitizePeriod({ ...periods[0], ...given });
+  return { periods };
 }
 
 export async function writeConfig(patch) {
@@ -118,11 +176,47 @@ export async function writeConfig(patch) {
   return next;
 }
 
-/** The effective monthly price for the selected plan. */
-export function planPrice(config = readConfig()) {
-  const plan = PLANS.find((p) => p.id === config.planId) ?? PLANS[0];
-  const base = config.monthlyOverride != null ? Number(config.monthlyOverride) : plan.monthly;
-  return { plan, monthly: base * (config.seats || 1) };
+/**
+ * What one period costs.
+ *
+ * `detectedMonths` is the span the transcripts cover, and is what a period with
+ * no `months` of its own resolves to. That keeps the single-period case exactly
+ * as it was before periods existed: leave the box empty and the app works the
+ * length out for you.
+ */
+export function periodPrice(period, detectedMonths = 1) {
+  const p = sanitizePeriod(period);
+  const plan = PLANS.find((x) => x.id === p.planId) ?? PLANS[0];
+  const base = p.monthlyOverride != null ? Number(p.monthlyOverride) : plan.monthly;
+  const monthly = base * (p.seats || 1);
+  const months = p.months ?? Math.max(1, Math.round(detectedMonths) || 1);
+  return {
+    planId: plan.id,
+    planName: plan.name,
+    note: plan.note,
+    monthly,
+    seats: p.seats,
+    months,
+    /** Whether this row's length was stated or worked out from the transcripts. */
+    monthsDeclared: p.months != null,
+    cost: monthly * months,
+  };
+}
+
+/** The whole declared plan: every period priced, and what they add up to. */
+export function planTotal(config = readConfig(), detectedMonths = 1) {
+  const periods = sanitizeConfig(config).periods.map((p) => periodPrice(p, detectedMonths));
+  return {
+    periods,
+    total: periods.reduce((sum, p) => sum + p.cost, 0),
+    declaredMonths: periods.reduce((sum, p) => sum + p.months, 0),
+  };
+}
+
+/** The first period's price, which is the whole story when there is only one. */
+export function planPrice(config = readConfig(), detectedMonths = 1) {
+  const first = periodPrice(sanitizeConfig(config).periods[0], detectedMonths);
+  return { plan: PLANS.find((p) => p.id === first.planId) ?? PLANS[0], monthly: first.monthly };
 }
 
 /* ------------------------------------------------------------------ *
@@ -208,7 +302,7 @@ const API_AHEAD = 0.85;
  * or an invoice. So both numbers here are computed, and neither is a bill:
  *
  * - `apiEquivalent` — the recorded tokens at published list rates.
- * - `planCost` — the price *the user typed*, times the months the work spans.
+ * - `planCost` — the prices *the user typed*, each over the months they declared.
  *
  * What is genuinely detectable is how Claude Code authenticates, and that says
  * which of the two is the hypothetical one. It does not say what anyone was
@@ -218,36 +312,59 @@ const API_AHEAD = 0.85;
  * available. It is gone, and nothing here replaces it, because there is nothing
  * on this machine that could.
  *
- * `firstAt`/`lastAt` bound the period so the plan is charged for the months the
- * work actually spans rather than a flat month.
+ * `firstAt`/`lastAt` bound the transcripts, giving the span a period falls back
+ * to when it does not state its own length. Anything the user *does* state wins:
+ * the history on one machine is not the history of the subscription, and after
+ * a reinstall it is not even close.
  */
 export function compareBilling({ apiEquivalent, firstAt, lastAt, config = readConfig() }) {
-  const { plan, monthly } = planPrice(config);
   const auth = detectAuth();
 
   const spanMs = Math.max(0, (lastAt ?? 0) - (firstAt ?? 0));
   const days = spanMs / 86_400_000;
   // Round up to whole months: you pay for a month even if you used four days of it.
   const months = Math.max(1, Math.ceil(days / 30.44));
-  const planCost = monthly * months;
+
+  const { periods, total: planCost, declaredMonths } = planTotal(config, months);
+  const first = periods[0];
 
   const ratio = planCost > 0 ? apiEquivalent / planCost : null;
   const difference = planCost > 0 ? apiEquivalent - planCost : 0;
 
   let verdict = 'unknown';
-  if (plan.id === 'none' || planCost <= 0) verdict = 'no-plan';
+  if (planCost <= 0) verdict = 'no-plan';
   else if (apiEquivalent <= 0) verdict = 'no-usage';
   else if (ratio >= PLAN_AHEAD) verdict = 'plan-ahead';
   else if (ratio >= API_AHEAD) verdict = 'close';
   else verdict = 'api-ahead';
+
+  // Several periods on the same tier read as one plan; different tiers get both
+  // names, because "Claude Pro" alone would misdescribe half the money.
+  const names = [...new Set(periods.filter((p) => p.cost > 0).map((p) => p.planName))];
+  const planLabel = names.length ? names.join(' + ') : first.planName;
 
   return {
     authMode: auth.mode,
     authEvidence: auth.evidence,
     /** True when Claude Code authenticates with a key, so list rates *are* the bill. */
     metered: auth.mode === 'api',
-    plan: { id: plan.id, name: plan.name, note: plan.note, monthly },
-    seats: config.seats || 1,
+    plan: { id: first.planId, name: first.planName, note: first.note, monthly: first.monthly },
+    /** Every declared period, priced. One row is always present. */
+    periods,
+    /** "Claude Pro + Claude Max 20×" when the tier changed mid-history. */
+    planLabel,
+    /** The months the plan is charged for, which is the user's to declare. */
+    declaredMonths,
+    /**
+     * The plan covers a different stretch of time from the transcripts.
+     *
+     * Not an error, and usually the point of the override: you have been paying
+     * for eight months and this machine holds three of them. It does mean the
+     * two sides of the comparison are measuring different spans, and the page
+     * has to say so rather than quietly divide one by the other.
+     */
+    spanMismatch: declaredMonths !== months,
+    /** The span the transcripts actually cover — the divisor for a run rate. */
     months,
     days: Math.round(days),
     /**
@@ -269,6 +386,8 @@ export function compareBilling({ apiEquivalent, firstAt, lastAt, config = readCo
     ratio,
     /** 'plan-ahead' | 'close' | 'api-ahead' | 'no-plan' | 'no-usage' | 'unknown' */
     verdict,
-    onSubscription: auth.mode === 'subscription' && plan.id !== 'none',
+    // Any declared period that costs something counts as being on a plan; a
+    // history of "none" rows is not one however many of them there are.
+    onSubscription: auth.mode === 'subscription' && planCost > 0,
   };
 }

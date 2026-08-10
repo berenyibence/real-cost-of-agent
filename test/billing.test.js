@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mergeConfig, planPrice, PLANS, sanitizeConfig, compareBilling } from '../server/billing.js';
+import {
+  compareBilling,
+  mergeConfig,
+  periodPrice,
+  planPrice,
+  planTotal,
+  PLANS,
+  sanitizeConfig,
+  sanitizePeriod,
+} from '../server/billing.js';
 
 /**
  * `readConfig`/`writeConfig` touch a real path under `~/.config`, so what is
@@ -13,6 +22,8 @@ import { mergeConfig, planPrice, PLANS, sanitizeConfig, compareBilling } from '.
  * and a `monthlyOverride` of `"abc"` becomes `NaN` and empties every figure on
  * the page.
  */
+
+const first = (config) => sanitizeConfig(config).periods[0];
 
 test('every plan prices to a real number, for any seat count', () => {
   for (const plan of PLANS) {
@@ -54,17 +65,17 @@ test('a seat count of zero never divides or zeroes the bill', () => {
  * ------------------------------------------------------------------ */
 
 test('an unknown plan never reaches storage, so it can never price as free', () => {
-  const config = sanitizeConfig({ planId: 'not-a-real-plan' });
+  const period = sanitizePeriod({ planId: 'not-a-real-plan' });
   assert.ok(
-    PLANS.some((p) => p.id === config.planId),
-    `stored "${config.planId}", which is not a plan`,
+    PLANS.some((p) => p.id === period.planId),
+    `stored "${period.planId}", which is not a plan`,
   );
-  assert.notEqual(config.planId, 'not-a-real-plan');
+  assert.notEqual(period.planId, 'not-a-real-plan');
 });
 
 test('an unparseable override is dropped rather than stored as NaN', () => {
   for (const bad of ['abc', {}, [], true, Infinity, NaN, -5]) {
-    const { monthlyOverride } = sanitizeConfig({ monthlyOverride: bad });
+    const { monthlyOverride } = sanitizePeriod({ monthlyOverride: bad });
     assert.ok(
       monthlyOverride === null || Number.isFinite(monthlyOverride),
       `${JSON.stringify(bad)} survived as ${monthlyOverride}`,
@@ -73,15 +84,29 @@ test('an unparseable override is dropped rather than stored as NaN', () => {
 });
 
 test('a negative or fractional seat count cannot be stored', () => {
-  assert.equal(sanitizeConfig({ seats: -99 }).seats, 1);
-  assert.equal(sanitizeConfig({ seats: 0 }).seats, 1);
-  assert.equal(sanitizeConfig({ seats: 2.7 }).seats, 2);
-  assert.equal(sanitizeConfig({ seats: 'lots' }).seats, 1);
+  assert.equal(sanitizePeriod({ seats: -99 }).seats, 1);
+  assert.equal(sanitizePeriod({ seats: 0 }).seats, 1);
+  assert.equal(sanitizePeriod({ seats: 2.7 }).seats, 2);
+  assert.equal(sanitizePeriod({ seats: 'lots' }).seats, 1);
 });
 
-test('a good config passes through unchanged', () => {
-  const good = { planId: 'max5', monthlyOverride: 90, seats: 3 };
-  assert.deepEqual(sanitizeConfig(good), good);
+test('a months override is a whole number of months, or absent', () => {
+  // Absent is a real answer meaning "ask the transcripts", so it has to be
+  // distinguishable from a value that failed to parse.
+  assert.equal(sanitizePeriod({}).months, null);
+  assert.equal(sanitizePeriod({ months: null }).months, null);
+  assert.equal(sanitizePeriod({ months: 'ages' }).months, null);
+  assert.equal(sanitizePeriod({ months: 0 }).months, null, 'nobody pays for zero months');
+  assert.equal(sanitizePeriod({ months: -4 }).months, null);
+  assert.equal(sanitizePeriod({ months: 3 }).months, 3);
+  assert.equal(sanitizePeriod({ months: 3.9 }).months, 3);
+  // A typo in a months box should not produce a six-figure plan.
+  assert.equal(sanitizePeriod({ months: 1e9 }).months, 600);
+});
+
+test('a good period passes through unchanged', () => {
+  const good = { planId: 'max5', monthlyOverride: 90, seats: 3, months: 4 };
+  assert.deepEqual(sanitizePeriod(good), good);
 });
 
 test('a patch changes what it names and nothing else', () => {
@@ -89,35 +114,153 @@ test('a patch changes what it names and nothing else', () => {
   // `undefined`. Spread straight over the stored config that reads as "set this
   // to nothing", and sanitising then replaces it with the default — so changing
   // the plan would silently reset a seat count set months ago.
-  const stored = { planId: 'max20', monthlyOverride: null, seats: 2 };
+  const stored = { periods: [{ planId: 'max20', monthlyOverride: null, seats: 2, months: 5 }] };
 
   const afterPlanChange = mergeConfig(stored, {
     planId: 'max5',
     monthlyOverride: undefined,
     seats: undefined,
+    months: undefined,
   });
 
-  assert.equal(afterPlanChange.planId, 'max5', 'the field that was named did change');
-  assert.equal(afterPlanChange.seats, 2, 'reset by an unrelated save');
+  assert.equal(afterPlanChange.periods[0].planId, 'max5', 'the field that was named did change');
+  assert.equal(afterPlanChange.periods[0].seats, 2, 'reset by an unrelated save');
+  assert.equal(afterPlanChange.periods[0].months, 5, 'reset by an unrelated save');
 
   // `null` is not "declining to say" — it means use the plan's own price, and
   // has to survive the same filter that drops `undefined`.
-  assert.equal(
-    mergeConfig({ ...stored, monthlyOverride: 90 }, { monthlyOverride: null }).monthlyOverride,
-    null,
-  );
+  const cleared = mergeConfig({ periods: [{ ...stored.periods[0], monthlyOverride: 90 }] }, {
+    monthlyOverride: null,
+  });
+  assert.equal(cleared.periods[0].monthlyOverride, null);
+  // Same for months: clearing the box means "ask the transcripts again".
+  assert.equal(mergeConfig(stored, { months: null }).periods[0].months, null);
 });
 
 test('an explicit null override survives, because it means "use the plan price"', () => {
-  assert.equal(sanitizeConfig({ planId: 'pro', monthlyOverride: null }).monthlyOverride, null);
+  assert.equal(first({ planId: 'pro', monthlyOverride: null }).monthlyOverride, null);
 });
 
 test('a corrupt file on disk sanitises to the default rather than throwing', () => {
-  for (const junk of [null, undefined, 'a string', 42, []]) {
+  for (const junk of [null, undefined, 'a string', 42, [], { periods: 'no' }, { periods: [] }]) {
     const config = sanitizeConfig(junk);
-    assert.ok(PLANS.some((p) => p.id === config.planId));
-    assert.ok(Number.isFinite(config.seats) && config.seats >= 1);
+    assert.equal(config.periods.length, 1, `${JSON.stringify(junk)} left no period to edit`);
+    assert.ok(PLANS.some((p) => p.id === config.periods[0].planId));
+    assert.ok(Number.isFinite(config.periods[0].seats) && config.periods[0].seats >= 1);
   }
+});
+
+/* ------------------------------------------------------------------ *
+ * Periods — a plan history, not a single tier
+ * ------------------------------------------------------------------ */
+
+test('a config stored before periods existed is read as one period', () => {
+  // The pre-0.4 shape. Discarding it would silently reset somebody's plan to the
+  // default, which is a plausible plan rather than a blank — so the page would
+  // keep showing a confident comparison against a subscription they are not on.
+  const config = sanitizeConfig({ planId: 'max5', monthlyOverride: 90, seats: 3 });
+  assert.equal(config.periods.length, 1);
+  assert.deepEqual(config.periods[0], {
+    planId: 'max5',
+    monthlyOverride: 90,
+    seats: 3,
+    months: null,
+  });
+});
+
+test('there is always exactly one period to edit, however many were asked for', () => {
+  assert.equal(sanitizeConfig({ periods: [] }).periods.length, 1);
+  assert.equal(sanitizeConfig({ periods: [{}, {}, {}] }).periods.length, 3);
+  // A malformed file should not render a plan editor with ten thousand rows.
+  assert.equal(sanitizeConfig({ periods: new Array(500).fill({}) }).periods.length, 24);
+});
+
+test('a period with no length of its own takes the span the transcripts show', () => {
+  // The whole no-override case: leave the box empty and the app works it out.
+  const p = periodPrice({ planId: 'pro', months: null }, 7);
+  assert.equal(p.months, 7);
+  assert.equal(p.monthsDeclared, false);
+  assert.equal(p.cost, 140);
+});
+
+test('a stated length wins over the transcripts, which is the point of stating it', () => {
+  // You have been paying for eight months; this laptop holds two of them.
+  const p = periodPrice({ planId: 'pro', months: 8 }, 2);
+  assert.equal(p.months, 8);
+  assert.equal(p.monthsDeclared, true);
+  assert.equal(p.cost, 160);
+});
+
+test('periods on different tiers add up, rather than averaging into one price', () => {
+  // Two months of Pro then three of Max 20x is $640, and no single tier says so.
+  const { total, declaredMonths, periods } = planTotal(
+    {
+      periods: [
+        { planId: 'pro', months: 2 },
+        { planId: 'max20', months: 3 },
+      ],
+    },
+    1,
+  );
+  assert.equal(periods[0].cost, 40);
+  assert.equal(periods[1].cost, 600);
+  assert.equal(total, 640);
+  assert.equal(declaredMonths, 5);
+});
+
+test('seats and an override still apply per period', () => {
+  const { total } = planTotal(
+    {
+      periods: [
+        { planId: 'team', months: 2, seats: 4 },
+        { planId: 'team', months: 1, seats: 4, monthlyOverride: 25 },
+      ],
+    },
+    1,
+  );
+  assert.equal(total, 30 * 4 * 2 + 25 * 4 * 1);
+});
+
+test('a plan history is named by every tier in it', () => {
+  const b = compareBilling({
+    apiEquivalent: 5000,
+    firstAt: 0,
+    lastAt: 0,
+    config: {
+      periods: [
+        { planId: 'pro', months: 2 },
+        { planId: 'max20', months: 3 },
+      ],
+    },
+  });
+  assert.equal(b.planCost, 640);
+  assert.equal(b.declaredMonths, 5);
+  assert.equal(b.planLabel, 'Claude Pro + Claude Max 20×');
+  assert.equal(b.periods.length, 2);
+});
+
+test('the declared plan and the transcripts covering different spans is stated, not hidden', () => {
+  const DAYS = 86_400_000;
+  const now = Date.now();
+  const b = compareBilling({
+    apiEquivalent: 500,
+    firstAt: now - 40 * DAYS,
+    lastAt: now,
+    config: { periods: [{ planId: 'pro', months: 9 }] },
+  });
+  assert.equal(b.months, 2, 'the transcripts span two months');
+  assert.equal(b.declaredMonths, 9, 'the plan is declared as nine');
+  assert.equal(b.spanMismatch, true);
+  assert.equal(b.planCost, 180);
+
+  // And when they agree, there is nothing to say.
+  const agreed = compareBilling({
+    apiEquivalent: 500,
+    firstAt: now - 40 * DAYS,
+    lastAt: now,
+    config: { periods: [{ planId: 'pro', months: 2 }] },
+  });
+  assert.equal(agreed.spanMismatch, false);
 });
 
 test('whatever the sanitiser emits, the price is always a real number', () => {
