@@ -116,6 +116,14 @@ build step — the install-free, single-`node`-command property is the point of 
 **A new plan.** Add it to `PLANS` in `server/billing.js`. `test/billing.test.js` prices every plan at
 several seat counts, so a malformed entry fails immediately.
 
+**Anything about what the user pays.** The config is `{ periods: [...] }` — a plan _history_, not a
+tier, because two months of Pro then three of Max is one cost that no single tier price describes.
+Each period carries `planId`, `monthlyOverride`, `seats` and `months`. `months: null` means "the span
+the transcripts show", and keeping that distinct from a value that failed to parse is the whole
+no-override case. Sanitising always leaves at least one period, so the editor is never empty, and the
+pre-0.4 flat shape is read as a single period rather than dropped — a config silently reset to the
+default is a config showing a confident comparison against a subscription nobody is on.
+
 **A new cut of the data.** Add the bucket in `spendBreakdown` (`server/spend.js`), then a `CUTS`
 entry and a renderer in `web/app.js`. Add the new bucket to the loop in `test/spend.test.js` that
 asserts everything sums to the total.

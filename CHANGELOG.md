@@ -2,6 +2,40 @@
 
 Notable changes, newest first. Dates are the day the change landed on `main`.
 
+## 0.4.0 — 2026-08-10
+
+The plan stopped being a tier and became a history.
+
+### Added
+
+- **A months override per period.** Leave it empty and the transcripts decide the length, exactly as
+  before. Type a number and it wins — which is the answer as soon as the history is incomplete, and
+  it usually is: the app can only see the transcripts on _this_ machine, so a reinstall, a second
+  laptop or a cleaned-out `~/.claude` all make the detected span shorter than what was actually paid
+  for.
+- **As many plan periods as the history needs.** Two months of Pro then three of Max 20× is $640
+  over five months, and no single tier price says so. Each row carries its own tier, price override,
+  seat count and length; rows can be added and removed, and one is always kept so the editor is never
+  empty. `compareBilling` reports every period priced, their total, and a `planLabel` naming each
+  distinct tier — "Claude Pro + Claude Max 20×" rather than whichever one happened to be first.
+- **`spanMismatch`.** When the declared plan covers a different stretch of time from the transcripts,
+  the page says so. It is usually the point of the override rather than a mistake, but the two sides
+  of the comparison are then measuring different spans and a reader should not have to infer that
+  from the numbers.
+
+### Changed
+
+- The stored config is now `{ periods: [...] }`. A pre-0.4 file is read as a single period rather
+  than discarded — losing it would silently reset the plan to a default that is a plausible plan
+  rather than a blank, and the page would go on showing a confident comparison against a subscription
+  nobody is on.
+- `POST /api/billing` takes `periods` to replace the list. The flat `planId` / `monthlyOverride` /
+  `seats` fields still edit the first period, so anything written against the old endpoint keeps
+  working.
+- The share card names every tier in the history, counts the declared months rather than the
+  transcript span for the plan clause, and says "on average" when quoting a monthly price blended
+  across periods — a figure that is on nobody's invoice should not be presented as one.
+
 ## 0.3.0 — 2026-08-09
 
 The billing panel stopped claiming something it could not know, and the share card learned to argue

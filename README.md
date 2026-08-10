@@ -45,11 +45,27 @@ transcripts carry token counts and a `service_tier`; no field anywhere names a d
 invoice. So both figures are computed, and the page says so next to them rather than in a footnote:
 
 - **The left-hand number** is your recorded tokens at published list rates.
-- **The middle number** is the plan price _you_ entered, times the months your transcripts span. Your
-  tier is not on disk anywhere and published prices change, so it is editable rather than asserted.
+- **The middle number** is what _you_ say you pay. Your tier is not on disk anywhere and published
+  prices change, so it is editable rather than asserted.
 - **Auth mode is detected**, from the beta set Claude Code records in local telemetry. That tells you
   which of the two figures is the hypothetical one. It does not tell you what you were billed, and
   the page no longer pretends otherwise.
+
+**Your plan is a history, not a tier.** Most people have not been on one plan for the whole period.
+Add a row per tier — two months of Pro then three of Max is $640, and no single tier price says so:
+
+| Field      | Meaning                                                                              |
+| ---------- | ------------------------------------------------------------------------------------ |
+| **Tier**   | The plan for that stretch. Add or remove rows; one row is always kept.                |
+| **$/mo**   | Override the list price — a grandfathered rate, a discount, a currency that is not USD |
+| **seats**  | For per-seat plans                                                                     |
+| **months** | How long you were on it. **Leave it empty and the transcripts decide.**                 |
+
+The months box is the one that matters most once your history is incomplete. The app can only see the
+transcripts on _this_ machine, so a reinstall, a second laptop, or a `~/.claude` you have cleaned out
+all make the detected span shorter than what you actually paid for. Type the real number and the
+comparison is right again. When the two disagree, the page says so rather than quietly dividing one
+by the other.
 
 **The verdict can go against the plan.** When your usage does not justify what you pay, the panel
 says so and points at metered API billing — same voice, same size, same prominence as when it goes

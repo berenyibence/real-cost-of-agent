@@ -90,6 +90,13 @@ superseded entries `legacy: true` rather than deleting them — old sessions sti
 **A new plan.** Add it to `PLANS` in `server/billing.js`. `test/billing.test.js` prices every plan at
 several seat counts, so a malformed entry fails immediately.
 
+**Anything about what the user pays.** The config is `{ periods: [...] }` — a plan *history*, not a
+tier, because two months of Pro then three of Max is one cost that no single tier price describes.
+Each period carries `planId`, `monthlyOverride`, `seats` and `months`, and `months: null` means "the
+span the transcripts show". Keep that null distinct from a value that failed to parse: it is the
+whole no-override case. One period always survives sanitising, so the editor is never empty, and the
+pre-0.4 flat shape is read as a single period rather than dropped.
+
 **A new cut of the data.** Add the bucket in `spendBreakdown` (`server/spend.js`), then a `CUTS`
 entry and a renderer in `web/app.js`. The new bucket must sum to `total` — add it to the loop in
 `test/spend.test.js` that asserts exactly that.
