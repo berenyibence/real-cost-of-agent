@@ -170,6 +170,35 @@ Notable changes, newest first. Dates are the day the change landed on `main`.
   elapsed figure is now shown only when it is one — within a single local day — and a session that
   crosses days shows the date range instead, which cannot be misread.
 
+### Polish
+
+- **A row with real money in it drew no bar.** The fill is a share of the largest row, and on a real
+  index the small rows are tiny shares: Sonnet 5 at $0.94 beside Opus 5 at $1,543 came out **0.39px
+  wide**, Haiku 4.5 at $0.10 came out **0.04px**. Both rendered as an empty track. There is a 2px
+  floor now, and it stops where honesty does — a row that genuinely cost nothing keeps its empty
+  track, because a stub there would claim spending that did not happen. The day chart had the
+  mirror image of the same problem: its floor was 2% of a 98px column, almost exactly the height of
+  the idle tick beside it, so colour alone separated "a little" from "nothing". That floor is 4px.
+
+- **The cut's one-line explanation rendered as a meaningless stub.** The picker is five fixed
+  buttons, so all the hint's slack comes out of the viewport: at 760px it had 100px to work with and
+  showed `Output, input, th…` — 21% of the sentence. It now takes its own line below 880px rather
+  than ellipsizing into nothing, and sits *under* the picker rather than above it, which also means
+  a longer hint can no longer move the picker at all. The header is the same height on every cut at
+  every width, which is what the ellipsis was originally protecting.
+
+- **A widow on the share card.** Greedy wrapping broke the caption as "…on Claude Pro over 2" /
+  "months.", stranding one word under a full line — the first thing anyone notices on an image meant
+  to be looked at rather than read. The last word of the line above now comes down to join it,
+  without changing the line count the vertical centring depends on.
+
+- **Percentages that would not line up.** The share column under each dollar figure was
+  proportional-figured while the figure above it was tabular, so right-aligning it lined up the `%`
+  and nothing else.
+
+- **A tooltip repeating text already fully on screen.** The untruncated name added for clipped rows
+  was going onto the component labels too, which are written in this repo and always fit.
+
 ### Added
 
 - **A Content-Security-Policy, so "no network calls" is enforced rather than promised.** Invariant 8

@@ -498,8 +498,18 @@ function roundRect(ctx, x, y, w, h, r) {
   }
 }
 
-/** Greedy wrap. The strings here are one or two lines; nothing needs Knuth. */
-function wrap(ctx, text, maxWidth) {
+/**
+ * Greedy wrap, with the last line never left holding one word.
+ *
+ * Nothing here needs Knuth — these strings are one or two lines. But greedy
+ * wrapping produces widows, and on the tall crops it reliably did: the caption
+ * broke as "…against $51 on Claude Pro over 2" / "months.", stranding a single
+ * word under a full line. That is the first thing anyone notices on a card
+ * meant to be looked at rather than read, so the last word of the previous line
+ * comes down to keep it company. The line count is unchanged, so the vertical
+ * centring above is unaffected.
+ */
+export function wrap(ctx, text, maxWidth) {
   const lines = [];
   let line = '';
   for (const word of String(text).split(' ')) {
@@ -512,6 +522,18 @@ function wrap(ctx, text, maxWidth) {
     }
   }
   if (line) lines.push(line);
+
+  if (lines.length > 1) {
+    const last = lines[lines.length - 1];
+    const previous = lines[lines.length - 2].split(' ');
+    // Only when the orphan really is alone, and only if the line above can
+    // spare a word without being left with none of its own.
+    if (!last.includes(' ') && previous.length > 1) {
+      const borrowed = previous.pop();
+      lines[lines.length - 2] = previous.join(' ');
+      lines[lines.length - 1] = `${borrowed} ${last}`;
+    }
+  }
   return lines;
 }
 

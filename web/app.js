@@ -715,7 +715,23 @@ function caveats() {
  * The cuts
  * ---------------------------------------------------------------- */
 
-function barRow({ name, pill, meta, sub, width, value, share, tokens }) {
+/**
+ * A bar wide enough to see, unless there is nothing to see.
+ *
+ * A share of the largest row is a fraction, and on a real index the smallest
+ * rows are tiny fractions: Sonnet 5 at $0.94 beside Opus 5 at $1,540 came out
+ * **0.39px wide**, and Haiku 4.5 at $0.10 came out 0.04px — rows carrying real
+ * money, drawn as an empty track. The floor is the same idea the day chart
+ * already uses, and it stops at the same place: a row that genuinely cost
+ * nothing keeps an empty track, because a 2px stub there would claim spending
+ * that did not happen.
+ */
+function barWidth(fraction) {
+  if (!Number.isFinite(fraction) || fraction <= 0) return '0';
+  return `max(2px, ${fraction * 100}%)`;
+}
+
+function barRow({ name, title, pill, meta, sub, width, value, share, tokens }) {
   return h(
     'div.bar-row',
     {},
@@ -725,14 +741,19 @@ function barRow({ name, pill, meta, sub, width, value, share, tokens }) {
       h(
         'div.label',
         {},
-        // `.name` is `text-overflow: ellipsis`, and a project or model name
-        // wide enough to clip was previously unrecoverable — there was nowhere
-        // else on the page it appeared in full.
-        h('span.name', { title: name }, name),
+        // `.name` is `text-overflow: ellipsis`, so a name wide enough to clip
+        // needs somewhere to be read in full. Only where that can happen:
+        // the component labels are written in this file and always fit, and a
+        // tooltip repeating text already fully on screen is noise.
+        h('span.name', { title }, name),
         pill && h('span.pill', {}, pill),
         meta && h('span.faint', { style: { fontSize: '11px' } }, meta),
       ),
-      h('div.bar-track', {}, h('div.bar-fill', { style: { width: `${width * 100}%` } })),
+      h(
+        'div.bar-track',
+        {},
+        h('div.bar-fill', { style: { width: barWidth(width) } }),
+      ),
       sub && h('div.sub', {}, sub),
       tokens,
     ),
@@ -784,6 +805,7 @@ function buckets(rows, total) {
     ...rows.map((r) =>
       barRow({
         name: r.name ?? r.id,
+        title: r.name ?? r.id,
         meta: plural(r.sessions, 'session'),
         sub: r.path ? h('span.mono.faint', {}, shortPath(r.path)) : null,
         width: r.cost / max,
@@ -919,7 +941,7 @@ function sessionRow(s, max) {
             'borrowed rate',
           ),
       ),
-      h('div.bar-track', {}, h('div.bar-fill', { style: { width: `${(s.cost / max) * 100}%` } })),
+      h('div.bar-track', {}, h('div.bar-fill', { style: { width: barWidth(s.cost / max) } })),
       h('div.sub', {}, facts.join(' · ')),
       tokenStrip(s),
     ),
@@ -1132,7 +1154,16 @@ function byDay(rows) {
           // An idle day is a flat baseline, not a 2% stub that reads as a
           // little bit of spend.
           class: d.cost > 0 ? null : 'idle',
-          style: { height: d.cost > 0 ? `${Math.max(2, (d.cost / max) * 100)}%` : '2px' },
+          /**
+           * 4px, and in pixels rather than percent, so a day that cost
+           * something is visibly taller than the day beside it that cost
+           * nothing. The floor used to be `2%` of a 98px column — about 2px,
+           * which is exactly the idle tick's height, leaving colour as the only
+           * thing telling them apart at the size where it is hardest to see.
+           * The floor states that a day happened, not how much it cost, and
+           * that is true of every day it applies to.
+           */
+          style: { height: d.cost > 0 ? `max(4px, ${(d.cost / max) * 100}%)` : '2px' },
         }),
       ),
     ),

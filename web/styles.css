@@ -485,6 +485,10 @@ input {
 .bar-row .share {
   font-size: 10.5px;
   color: var(--text-faint);
+  /* Tabular, like the figure directly above it. Right-aligning proportional
+     digits lines up the `%` and nothing else, so the column read as ragged
+     against a value column that was already lining up properly. */
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- the session browser ---- */
@@ -789,15 +793,30 @@ input {
   .period-row > .select {
     grid-column: 1 / -1;
   }
+}
 
-  /* There is no room for a title, a sentence and a five-button picker on one
-     line here, so the hint takes its own — for every cut, so the header is still
-     the same height whichever one is selected. Wrapping rather than ellipsizing,
-     because at this width the ellipsis would start after about three words. */
+/* There is no room for a title, a sentence and a five-button picker on one line
+   below this, so the hint takes its own — for every cut, so the header is still
+   the same height whichever one is selected. Wrapping rather than ellipsizing,
+   because down here the ellipsis starts after about three words.
+
+   880 rather than 720, which is where this used to sit. The picker is a fixed
+   five buttons and the title barely moves, so all the slack the hint gets comes
+   out of the viewport: at 760px it was left with 100px and rendered "Output,
+   input, th…" — 21% of the sentence, which says nothing and reads as a bug.
+   Below 880 there is under ~200px of slack, and a wrapped line is worth more
+   than a stub. */
+@media (max-width: 880px) {
   .card-head .hint {
     flex-basis: 100%;
     white-space: normal;
     overflow: visible;
+    /* Last in flex order, not in the DOM. Left at its source position the
+       header became three rows — title, sentence, then the picker stranded on a
+       line of its own against the right edge with nothing beside it. Sending
+       the hint below both puts the title and the picker back on one line and
+       reads as a caption under a heading, which is what it is. */
+    order: 1;
   }
 }
 

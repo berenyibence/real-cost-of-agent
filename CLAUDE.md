@@ -224,6 +224,11 @@ point of the project.
   `meta.found` alone does not distinguish them — `meta.sessions` is the other half. The same applies
   one level down: a cut with no rows returns a childless node so `whereItWent` can show its own
   empty state rather than drawing an empty chart.
+- **A quantity drawn as nothing is a quantity the reader will not see.** A bar is a share of the
+  largest row, so the smallest rows round to sub-pixel — $0.94 beside $1,543 drew 0.39px, which is
+  an empty track. Floors (2px on a row, 4px on a day column) say *this happened* without claiming
+  how much, and they stop at zero: a row that cost nothing keeps its empty track, and an idle day
+  keeps its grey tick, because a stub there would be a lie in the other direction.
 - **Prose in the UI never points at a layout.** "The figure on the left" and "the one beside it"
   were accurate at desktop width and wrong below 720px, where the cells stack. Name the thing.
 - **Text that carries information passes WCAG AA (4.5:1).** `--text-faint` is a hierarchy, not

@@ -29,6 +29,7 @@ import {
   shareTargets,
   shareText,
   shareable,
+  wrap,
 } from '../web/share.js';
 
 /**
@@ -521,4 +522,36 @@ test('the image formats cover the platforms the buttons offer', () => {
   const landscape = FORMATS[0];
   assert.equal(landscape.w, 1200);
   assert.equal(landscape.h, 630);
+});
+
+/* ------------------------------------------------------------------ *
+ * The card is looked at, not read
+ * ------------------------------------------------------------------ */
+
+/** A stand-in for a canvas context: every character is one unit wide. */
+const ruler = { measureText: (text) => ({ width: text.length }) };
+
+test('the last line of a caption is never left holding one word', () => {
+  // Greedy wrapping put "months." alone under a full line on both tall crops —
+  // the first thing anyone notices on an image meant to be looked at.
+  const caption = '$2,327 at API list rates, against $51 on Claude Pro over 2 months.';
+  const lines = wrap(ruler, caption, 58);
+
+  assert.ok(lines.length > 1, 'the fixture has to actually wrap');
+  const last = lines[lines.length - 1];
+  assert.ok(last.includes(' '), `last line is a widow: "${last}"`);
+  // Nothing was invented or lost on the way.
+  assert.equal(lines.join(' '), caption);
+});
+
+test('borrowing a word never empties the line it came from', () => {
+  // Two words total: the line above cannot spare one, so the wrap stands.
+  const lines = wrap(ruler, 'aaaaaaaaaa bbbbbbbbbb', 12);
+  assert.deepEqual(lines, ['aaaaaaaaaa', 'bbbbbbbbbb']);
+  assert.ok(lines.every((l) => l.length > 0));
+});
+
+test('text that fits on one line is left alone', () => {
+  assert.deepEqual(wrap(ruler, 'short enough', 40), ['short enough']);
+  assert.deepEqual(wrap(ruler, 'one', 40), ['one']);
 });
