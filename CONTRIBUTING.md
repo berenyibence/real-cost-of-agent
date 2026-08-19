@@ -165,6 +165,12 @@ of them asserted in `test/share.test.js`:
 
 - One concern per pull request. A price update and a UI change are two.
 - `npm test` must pass. Add a test for anything with arithmetic or a boundary in it.
+
+  It is `node --test` with no argument on purpose. `node --test "test/*.test.js"` needs the runner to
+  expand the glob itself, which it did not learn to do until after 20.11 — the floor `engines`
+  claims — and `node --test test/` is the mirror image, working on 20.11 and failing on 24 and
+  later. Bare discovery is the only spelling that holds across the whole supported range, and it
+  leans on no shell, which matters because CI runs on Windows too.
 - Say what you verified by hand. "Ran it against my own `~/.claude`, 300 sessions, totals matched the
   old build to the cent" is the most useful sentence in a review.
 - Screenshots for anything visual, in both themes if you touched colour.
