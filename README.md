@@ -18,21 +18,33 @@ API rates, and tells you what your subscription actually bought.
 
 ---
 
-> **68 sessions. 10,444 API calls. 2.7B cached tokens. $2,284 at API list rates — against $640 of plan.**
+> **68 sessions. 10,923 API calls. 3.1B cached tokens. $1,915 at API list rates — against $640 of plan.**
 >
-> That is one laptop, read in under a second. Every figure came off its own disk, and nothing was
-> sent anywhere to produce it.
+> Two months of agent work, priced in under a second from transcripts that were already on the
+> disk. Nothing was sent anywhere to produce it.
 
 ![The plan-versus-list-rates panel](docs/screenshots/plan-vs-list-rates.png)
+
+<sub>Every screenshot on this page is shot against a **generated sample**, not a real machine. The
+by-project and by-session cuts render directory and session names straight off your disk, so no
+screenshot here is taken from anybody's real work — which is also why you will not find a shot of
+those two cuts below.</sub>
+
+```bash
+npx real-cost-of-agent
+```
+
+Then open **http://127.0.0.1:4319**. That is the whole setup. No account, no API key, no build step,
+and nothing to install — the package has zero dependencies, so `npx` fetches one 100kB tarball and
+runs it.
+
+Or from a clone, which is the same file doing the same thing:
 
 ```bash
 git clone https://github.com/berenyibence/real-cost-of-agent.git
 cd real-cost-of-agent
 node server/index.js
 ```
-
-Then open **http://127.0.0.1:4319**. That is the whole setup — there is no `npm install`, because
-there is nothing to install. No account, no API key, no build step, no dependencies.
 
 ---
 
@@ -125,8 +137,9 @@ Filter by session or project, sort by cost, recency, output, tokens or requests.
 is on screen and what it is out of, in both rows and dollars.
 
 **Every row carries its token split, so a bill can be argued with.** A model row that shows one dollar
-figure invites exactly one question and cannot answer it. These can: 2.1B cache reads is a very
-different story from 7M output tokens, and they are the reason one model took two thirds of the bill.
+figure invites exactly one question and cannot answer it. These can: 1.9B cache reads is a very
+different story from 7.9M output tokens, and together they are why one model took three quarters of
+the bill.
 
 ![By model, with the token split on every row](docs/screenshots/by-model.png)
 
@@ -191,7 +204,8 @@ X, LinkedIn and Facebook, or 1080×1350 and 1080×1080 for Instagram and Threads
 
 ## Requirements
 
-- **Node 20.11 or newer.** Nothing else.
+- **Node 20.11 or newer.** Nothing else — the package declares no dependencies, and CI fails if one
+  is ever added.
 - **Claude Code, run at least once**, so there are transcripts to read. If there are none, the page
   says so and names the directory it looked in.
 
@@ -225,11 +239,14 @@ open the network tab and there is nothing in it. CI asserts the header on every 
 
 ## Configuration
 
-Every setting is an environment variable, and every one has a working default:
+Every setting is an environment variable, and every one has a working default. The two flags are the
+ones any installed binary should answer:
 
 ```bash
-PORT=4400 node server/index.js          # default 4319
-HOST=127.0.0.1 node server/index.js     # loopback; change at your own risk
+npx real-cost-of-agent --help           # the list below, without leaving the terminal
+npx real-cost-of-agent --version
+PORT=4400 npx real-cost-of-agent        # default 4319
+HOST=127.0.0.1 npx real-cost-of-agent   # loopback; change at your own risk
 CLAUDE_HOME=/path/to/.claude npm start  # read someone else's export, or a backup
 XDG_CONFIG_HOME=~/.config npm start     # where this app stores your plan
 ```

@@ -131,3 +131,51 @@ jobs:
           done
 
           kill $server
+
+  package:
+    name: the published tarball is the whole app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # `files` in package.json is an allowlist, so anything new under web/ or
+      # server/ that is not covered by it is missing from the published package
+      # and nowhere else. That failure never shows up in a clone — only for
+      # somebody running `npx real-cost-of-agent`, which is now the documented
+      # way in. So the tarball gets installed and exercised like a user's.
+      - name: Pack, install elsewhere, and serve from there
+        run: |
+          set -e
+          npm pack --pack-destination /tmp >/dev/null
+          tarball=$(ls /tmp/real-cost-of-agent-*.tgz)
+          echo "packed $(du -h "$tarball" | cut -f1)"
+
+          mkdir -p /tmp/consumer && cd /tmp/consumer
+          npm init -y >/dev/null
+          npm install "$tarball" >/dev/null
+          bin=./node_modules/.bin/real-cost-of-agent
+
+          test "$($bin --version)" = "$(node -p "require('/tmp/consumer/node_modules/real-cost-of-agent/package.json').version")"
+          $bin --help >/dev/null
+          echo "--version and --help answer"
+
+          mkdir -p /tmp/npx-claude/projects
+          CLAUDE_HOME=/tmp/npx-claude XDG_CONFIG_HOME=/tmp/npx-cfg PORT=4361 $bin &
+          server=$!
+          for i in $(seq 1 40); do
+            curl -fsS http://127.0.0.1:4361/api/spend >/dev/null 2>&1 && break
+            sleep 0.25
+          done
+
+          # Every asset the page needs, served out of node_modules rather than a
+          # checkout. A file missing from `files` 404s here.
+          for path in / /theme.js /app.js /share.js /styles.css /brand/mark.svg /api/spend /api/billing; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:4361$path")
+            echo "  $path -> $code"
+            test "$code" = 200
+          done
+
+          kill $server

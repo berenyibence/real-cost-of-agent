@@ -209,6 +209,11 @@ point of the project.
 
 ## Style
 
+- **`files` in `package.json` is an allowlist, and it is the publish surface.** Anything new under
+  `web/` or `server/` that it does not cover is missing from the tarball and present in every clone,
+  so the failure is invisible to whoever added it and total for anybody arriving by `npx`. The
+  `package` job in CI installs the tarball somewhere else and serves every asset from there; keep it
+  in step when the file layout changes. `docs/`, `test/` and the workflows deliberately stay out.
 - **Refer to an invariant by its words, not its number.** The list gets inserted into, and a
   reference in another file does not move when it does — twice now a renumber has left `server/` and
   CI pointing at the wrong rule. "The *no network calls, ever* invariant" survives; "invariant 9"

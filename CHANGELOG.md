@@ -2,7 +2,9 @@
 
 Notable changes, newest first. Dates are the day the change landed on `main`.
 
-## Unreleased
+## 0.6.0 — 2026-08-19
+
+The first public release. Everything below landed between the last tagged version and going public.
 
 ### Fixed
 
@@ -200,6 +202,21 @@ Notable changes, newest first. Dates are the day the change landed on `main`.
   was going onto the component labels too, which are written in this repo and always fit.
 
 ### Added
+
+- **`npx real-cost-of-agent`.** The package is published now, with a `bin`, so the documented way in
+  is one command that needs no clone and no install — zero dependencies means `npx` fetches a single
+  ~100kB tarball. `--help` and `--version` answer the way an installed binary should, and the
+  port-busy hint names whichever way you started it. `files` is an allowlist, so the tarball is the
+  app and nothing else: no screenshots, no tests, no workflows. CI packs it, installs it elsewhere
+  and serves every asset from there, because a file missing from that allowlist is invisible in a
+  clone and broken for everybody arriving by `npx`.
+
+- **The screenshots are shot against a generated sample.** They were stale — taken before money was
+  grouped, before the by-day chart declared its window, before the bar floors existed — and they
+  came off a real machine. The by-project and by-session cuts render directory and session names
+  straight off disk, so a fixture removes the question entirely: every figure in `docs/` now comes
+  from invented projects and invented prompts, and the README says so. The absence of a by-project
+  or by-session shot is still a decision rather than a gap.
 
 - **A Content-Security-Policy, so "no network calls" is enforced rather than promised.** Invariant 8
   has always been true of the source and has always been checkable only by reading it. It is now a

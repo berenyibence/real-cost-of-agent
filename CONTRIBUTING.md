@@ -103,6 +103,10 @@ The layering is worth preserving.
 | `web/share.js`      | the aggregate allowlist, the post text, the canvas card              |
 | `web/theme.js`      | light or dark before first paint. A file, not an inline block — the CSP forbids one |
 
+Adding a file under `server/` or `web/` means checking `files` in `package.json`: it is an allowlist,
+so anything it does not cover works in your clone and is missing from `npx real-cost-of-agent`. CI's
+`package` job installs the tarball elsewhere and serves the page from there, which is what catches it.
+
 `scan.js` is the only module that parses vendor JSON, and `models.js` / `spend.js` are pure
 arithmetic over normalized numbers. **Adding a second agent's transcripts should mean writing one new
 scanner, not touching the pricing.** If you are here to add support for another tool, that is the

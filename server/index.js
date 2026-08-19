@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Real Cost of Agent — the whole server.
  *
@@ -5,8 +6,12 @@
  * and makes no outbound request of any kind. There is no account, no key, and
  * nothing to sign in to. If it is running, everything it knows came off your own
  * disk.
+ *
+ * This file is also the published binary, hence the shebang: `npx
+ * real-cost-of-agent` runs exactly what `node server/index.js` runs.
  */
 
+import fs from 'node:fs';
 import http from 'node:http';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -17,12 +22,73 @@ import { CLAUDE_DIR, claudeCodeFound } from './scan.js';
 import { spendBreakdown } from './spend.js';
 import { compareBilling, detectAuth, PLANS, readConfig, writeConfig } from './billing.js';
 
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const WEB_DIR = path.join(HERE, '..', 'web');
+
+/**
+ * Read rather than imported.
+ *
+ * `import ... with { type: 'json' }` would be tidier and is not available on
+ * every runtime this claims to support — `engines` says Node 20.11, and import
+ * attributes are not a safe assumption that far back. This is one file read at
+ * startup.
+ */
+function version() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(HERE, '..', 'package.json'), 'utf8')).version;
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * What `--help` prints.
+ *
+ * Every setting is an environment variable, because that is what this had
+ * before it was installable and changing it would break anybody's notes. The
+ * flags are the two a published binary is expected to answer.
+ */
+const USAGE = `real-cost-of-agent — what your agent would have cost
+
+  npx real-cost-of-agent          run it, then open the URL it prints
+  node server/index.js            the same thing, from a clone
+
+Options
+  -h, --help                      show this and exit
+  -v, --version                   print the version and exit
+
+Environment
+  PORT=4400                       listen on another port (default 4319)
+  HOST=127.0.0.1                  bind address; loopback by default
+  CLAUDE_HOME=/path/to/.claude    read transcripts from somewhere else
+  XDG_CONFIG_HOME=~/.config       where this app stores your plan
+
+It reads ~/.claude, writes one preference file, and makes no network
+request of any kind. Nothing leaves this machine.
+`;
+
+const argv = process.argv.slice(2);
+if (argv.includes('-h') || argv.includes('--help')) {
+  process.stdout.write(USAGE);
+  process.exit(0);
+}
+if (argv.includes('-v') || argv.includes('--version')) {
+  process.stdout.write(`${version()}\n`);
+  process.exit(0);
+}
+// Silently ignoring a flag is how somebody ends up believing `--port 4400`
+// worked. Everything here is an environment variable; say so.
+const unknown = argv.filter((a) => a.startsWith('-'));
+if (unknown.length) {
+  process.stderr.write(`real-cost-of-agent: unknown option ${unknown[0]}\n\n${USAGE}`);
+  process.exit(1);
+}
+
 // 4317 and 4318 are OpenTelemetry's default collector ports and are commonly
 // taken on a machine that runs agents; 4319 is the next one up that is not
 // claimed by anything standard.
 const PORT = Number(process.env.PORT) || 4319;
 const HOST = process.env.HOST || '127.0.0.1';
-const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -238,7 +304,10 @@ server.listen(PORT, HOST, () => {
 // dumping a stack for: it is almost always a second copy of this app.
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`[real-cost] port ${PORT} is busy. Try: PORT=4400 npm start`);
+    // Named the way it was actually started, so the suggestion is copy-pasteable
+    // whether that was npx or a clone.
+    const how = process.argv[1]?.includes('node_modules') ? 'npx real-cost-of-agent' : 'npm start';
+    console.error(`[real-cost] port ${PORT} is busy. Try: PORT=4400 ${how}`);
     process.exit(1);
   }
   throw err;
