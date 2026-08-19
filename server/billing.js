@@ -63,6 +63,28 @@ const MAX_PERIODS = 24;
 /** Fifty years. A typo in a months box should not produce a six-figure plan. */
 const MAX_MONTHS = 600;
 
+/**
+ * The same reasoning as `MAX_MONTHS`, applied to the other two numbers — which
+ * it was not, and that asymmetry was the bug.
+ *
+ * `seats` had no ceiling at all, so a fat-fingered `1000000000` in a box beside
+ * a capped one produced a $360bn plan and a verdict computed against it. Worse,
+ * `monthlyOverride` had none either: at 1e308 over 600 months `planCost`
+ * overflows to `Infinity`, and the two halves of the app then tell different
+ * stories about the same config. The page reports `api-ahead` with a difference
+ * of `-Infinity` — rendered as an em dash, so the sentence reads "costs — more
+ * than the usage" — while `shareFacts` runs it through `finite()`, gets 0, and
+ * the share card says there is no plan set at all. One config, two
+ * incompatible claims, which is the exact failure every breakdown summing to
+ * the total exists to rule out.
+ *
+ * Clamped rather than rejected, because that is what `months` already does and
+ * because this is a preference rather than a transaction: a plan that is too
+ * large is shown at the ceiling, not thrown away.
+ */
+const MAX_SEATS = 10_000;
+const MAX_MONTHLY = 1_000_000;
+
 const DEFAULT_CONFIG = { periods: [{ ...DEFAULT_PERIOD }] };
 
 /**
@@ -89,11 +111,15 @@ export function sanitizePeriod(raw) {
   // unparseable value and has to survive.
   if (raw.monthlyOverride != null) {
     const monthly = Number(raw.monthlyOverride);
-    if (Number.isFinite(monthly) && monthly >= 0) period.monthlyOverride = monthly;
+    if (Number.isFinite(monthly) && monthly >= 0) {
+      period.monthlyOverride = Math.min(monthly, MAX_MONTHLY);
+    }
   }
 
   const seats = Number(raw.seats);
-  if (Number.isFinite(seats) && seats >= 1) period.seats = Math.floor(seats);
+  if (Number.isFinite(seats) && seats >= 1) {
+    period.seats = Math.min(Math.floor(seats), MAX_SEATS);
+  }
 
   // Same distinction again: null is "ask the transcripts", not "unparseable".
   if (raw.months != null) {
@@ -239,7 +265,36 @@ export function detectAuth({ refresh = false } = {}) {
   };
 
   try {
-    const files = fs.readdirSync(TELEMETRY_DIR).filter((f) => f.endsWith('.json'));
+    /**
+     * The **newest** sixty files, not the first sixty the directory lists.
+     *
+     * Telemetry filenames are UUIDs, so directory order is unrelated to time,
+     * and `slice(0, 60)` was therefore an arbitrary historical sample. That is
+     * the wrong question: this function reports how Claude Code authenticates
+     * *now*, because that is what decides which of the two figures on the page
+     * is the hypothetical one.
+     *
+     * It also got the answer wrong outright for anyone who had switched. The
+     * tally below requires `oauth >= apiKey`, so somebody who moved from an API
+     * key to a subscription last week — with months of key-authenticated
+     * telemetry still on disk — was reported as metered, and told the list-rate
+     * figure was "what you were actually metered". Sampling newest-first makes
+     * the recent state the one that wins.
+     */
+    const files = fs
+      .readdirSync(TELEMETRY_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .map((name) => {
+        let mtimeMs = 0;
+        try {
+          mtimeMs = fs.statSync(path.join(TELEMETRY_DIR, name)).mtimeMs;
+        } catch {
+          /* vanished between the listing and the stat — sorts to the back */
+        }
+        return { name, mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .map((f) => f.name);
     let oauth = 0;
     let apiKey = 0;
     for (const name of files.slice(0, 60)) {

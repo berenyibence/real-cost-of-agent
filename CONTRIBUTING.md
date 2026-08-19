@@ -94,13 +94,14 @@ The layering is worth preserving.
 | File                | Owns                                                                |
 | ------------------- | ------------------------------------------------------------------- |
 | `server/index.js`   | routes and static serving. Every route is listed in one `if` chain   |
-| `server/scan.js`    | **everything that knows what a Claude Code transcript looks like**   |
+| `server/scan.js`    | **everything that knows what a Claude Code transcript looks like** — including that a session spans several files, subagents included |
 | `server/store.js`   | the cached index, and `withEconomics` — pricing applied to a session |
 | `server/models.js`  | the catalog: rates, context windows, cache multipliers, tiers        |
 | `server/spend.js`   | `spendBreakdown` — one set of dollars split five ways                |
 | `server/billing.js` | plans, config sanitising, OAuth-vs-API detection, the comparison     |
 | `web/app.js`        | the page. `h()` builds DOM; `render()` rebuilds it from `state`      |
 | `web/share.js`      | the aggregate allowlist, the post text, the canvas card              |
+| `web/theme.js`      | light or dark before first paint. A file, not an inline block — the CSP forbids one |
 
 `scan.js` is the only module that parses vendor JSON, and `models.js` / `spend.js` are pure
 arithmetic over normalized numbers. **Adding a second agent's transcripts should mean writing one new

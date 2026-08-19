@@ -186,26 +186,14 @@ const behind = (f) => f.verdict === 'api-ahead';
  * other way. A card that can only say "my plan is great" is an advertisement,
  * and it would make the ones that say something true less believable.
  */
+/**
+ * Order is the default: `angleFor` falls back to the first entry, and the picker
+ * opens on it. "Saved" leads because a dollar figure is the one number a reader
+ * understands without being told what it is a ratio *of* — a multiple has to be
+ * explained before it can land, and a post that needs a sentence of setup is a
+ * post nobody finishes.
+ */
 export const ANGLES = [
-  {
-    id: 'value',
-    label: 'Value',
-    note: 'What every $1 of plan bought. Strongest when the multiple is large.',
-    eyebrow: (f) => (f.hasPlan ? 'WHAT EVERY $1 OF PLAN BOUGHT' : 'CLAUDE CODE, PRICED AT API LIST RATES'),
-    number: (f) => (f.ratio ? `${f.ratio.toFixed(1)}×` : dollars(f.total)),
-    headline: (f) => {
-      if (!f.hasPlan) return `${dollars(f.total)} — what my Claude Code sessions would cost at API list rates.`;
-      if (behind(f)) return `${f.ratio.toFixed(1)}× — my Claude Code plan did not pay for itself.`;
-      return `${f.ratio.toFixed(1)}× — what my Claude Code plan actually returned.`;
-    },
-    caption: (f) => {
-      if (!f.hasPlan) return `${plural(f.sessions, 'session')} across ${plural(f.projects, 'project')}.`;
-      if (behind(f)) {
-        return `${dollars(f.total)} of work at list rates, against ${planClause(f)} — ${gapClause(f)}.`;
-      }
-      return `${dollars(f.total)} at list rates, against ${planClause(f)} — ${gapClause(f)}.`;
-    },
-  },
   {
     id: 'saved',
     label: 'Saved',
@@ -228,6 +216,38 @@ export const ANGLES = [
         : `${plural(f.sessions, 'session')} across ${plural(f.projects, 'project')}.`,
   },
   {
+    id: 'value',
+    label: 'Value',
+    note: 'What every $1 of plan bought. Strongest when the multiple is large.',
+    eyebrow: (f) => (f.hasPlan ? 'WHAT EVERY $1 OF PLAN BOUGHT' : 'CLAUDE CODE, PRICED AT API LIST RATES'),
+    number: (f) => (f.ratio ? `${f.ratio.toFixed(1)}×` : dollars(f.total)),
+    /**
+     * `f.ratio` is null whenever there is no usable multiple to state, and every
+     * reader of it has to say so rather than assume otherwise.
+     *
+     * `number` above always guarded and these two did not, which made a plan
+     * with an unusable ratio throw a `TypeError` out of `headline` — out of
+     * `sharePanel`, out of `render`, and the page went blank rather than the
+     * panel. In the shipped app `shareable()` and `compareBilling` between them
+     * happen to guarantee a positive ratio here, but that is an invariant held
+     * in two other modules with nothing local depending on it: the next angle
+     * added, or the next change to `shareFacts`, inherits a blank page.
+     */
+    headline: (f) => {
+      if (!f.hasPlan) return `${dollars(f.total)} — what my Claude Code sessions would cost at API list rates.`;
+      if (!f.ratio) return `${dollars(f.total)} of Claude Code, at API list rates.`;
+      if (behind(f)) return `${f.ratio.toFixed(1)}× — my Claude Code plan did not pay for itself.`;
+      return `${f.ratio.toFixed(1)}× — what my Claude Code plan actually returned.`;
+    },
+    caption: (f) => {
+      if (!f.hasPlan) return `${plural(f.sessions, 'session')} across ${plural(f.projects, 'project')}.`;
+      if (behind(f)) {
+        return `${dollars(f.total)} of work at list rates, against ${planClause(f)} — ${gapClause(f)}.`;
+      }
+      return `${dollars(f.total)} at list rates, against ${planClause(f)} — ${gapClause(f)}.`;
+    },
+  },
+  {
     id: 'runrate',
     label: 'Run rate',
     note: 'What the habit costs per month, metered. The "could I actually afford this?" angle.',
@@ -246,6 +266,9 @@ export const ANGLES = [
       // Several tiers blend into an average, and calling it one flat price
       // would be a number the reader could not find on any invoice.
       const rate = f.planPeriods > 1 ? `${dollars(f.planMonthly)}/mo on average` : `${dollars(f.planMonthly)}/mo`;
+      // Same guard as `headline` above: no multiple to state, so the sentence
+      // that states one is dropped rather than built from a null.
+      if (!f.ratio) return `Against ${rate} of ${f.planName}.`;
       return `Against ${rate} of ${f.planName}. Same work, ${f.ratio.toFixed(1)}× the price.`;
     },
   },
@@ -347,7 +370,7 @@ export function shareText(f, { tone = 'short', angle = 'value', limit = 280 } = 
       '',
       `So: ${subhead(f, angle)} Split by model, by project and by day, with the cache traffic priced at the multipliers the API really bills.`,
       '',
-      `${PRODUCT} is one Node command. No dependencies, no build step, no account, no API key, and nothing leaves the machine.`,
+      `${PRODUCT} is one Node command over transcripts you already have. No dependencies, no build step, nothing to sign up for, and nothing leaves the machine.`,
       '',
       'Free and open source, Apache-2.0:',
       REPO_URL,
@@ -375,7 +398,7 @@ export function redditTitle(f, angle = 'value') {
 }
 
 export function hackerNewsTitle() {
-  return `Show HN: ${PRODUCT} – price your Claude Code transcripts locally, no account`;
+  return `Show HN: ${PRODUCT} – price your Claude Code transcripts locally`;
 }
 
 /* ---------------------------------------------------------------- *
@@ -593,7 +616,11 @@ export function paintShareCard(canvas, f, { format = 'landscape', scale = 2, ang
   const repoWidth = ctx.measureText(REPO_SHORT).width;
   ctx.fillText(REPO_SHORT, pad, footBaseline);
 
-  const closer = 'runs locally · no account · no API key';
+  // "no account · no API key" was a list of things that are absent, which reads
+  // as a spec sheet and makes a reader wonder why either was ever on the table.
+  // What it was actually promising is that there is no setup and no sign-up
+  // between seeing this card and seeing your own number — so it says that.
+  const closer = 'runs locally · nothing to sign up for';
   ctx.font = font(400, footSize);
   ctx.fillStyle = '#67718a';
   const closerWidth = ctx.measureText(closer).width;

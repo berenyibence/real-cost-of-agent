@@ -11,9 +11,25 @@
  *   write 1h   2x
  * Transcripts record the 5m/1h split per request, so cost is computed exactly
  * rather than assumed.
+ *
+ * The model is not the whole rate, though: fast mode and US-pinned inference
+ * both move it, both are recorded per request, and both are read here rather
+ * than assumed away. See `requestRates`.
  */
 
-/** Rates in $/MTok. `until` marks promotional pricing with an end date. */
+/**
+ * Rates in $/MTok. `promo.until` marks promotional pricing with an end date.
+ * `fastInput`/`fastOutput` are the published fast-mode rates, on the two models
+ * that have them.
+ *
+ * No entry carries a `promo` today — Sonnet 5's introductory rate became its
+ * standard rate — but the mechanism stays, because the rule it enforces does: a
+ * promotion is an offer on one named model for one stated period, and
+ * `lookupModel` must never extend it to an id nobody has published a price for.
+ *
+ * Verified against the published rate card on 2026-08-11, including the
+ * per-model cache columns.
+ */
 const CATALOG = {
   'claude-fable-5': {
     name: 'Fable 5',
@@ -36,6 +52,15 @@ const CATALOG = {
     tier: 'opus',
     input: 5,
     output: 25,
+    /**
+     * Fast mode is the same model served at up to 2.5x the output speed, and it
+     * is billed at its own published rate rather than as a multiplier on the
+     * standard one — $10/$50, exactly double. Claude Code exposes it as `/fast`
+     * and records `speed: "fast"` on every request that used it, so this is
+     * measured; pricing those requests off the standard column halves them.
+     */
+    fastInput: 10,
+    fastOutput: 50,
     context: 1_000_000,
     maxOutput: 128_000,
   },
@@ -44,6 +69,10 @@ const CATALOG = {
     tier: 'opus',
     input: 5,
     output: 25,
+    // The other model with published fast-mode pricing. Opus 4.7 had it
+    // withdrawn and Opus 4.6 never had it, so neither carries these.
+    fastInput: 10,
+    fastOutput: 50,
     context: 1_000_000,
     maxOutput: 128_000,
   },
@@ -93,10 +122,23 @@ const CATALOG = {
   'claude-sonnet-5': {
     name: 'Sonnet 5',
     tier: 'sonnet',
-    input: 3,
-    output: 15,
-    // Introductory pricing runs through 2026-08-31.
-    promo: { input: 2, output: 10, until: '2026-08-31' },
+    /**
+     * $2/$10 is the **standard** rate, not a promotion.
+     *
+     * It launched as introductory pricing through 2026-08-31, and this entry
+     * modelled it that way — `input: 3, output: 15` with a `promo` overriding
+     * it until the window closed. Anthropic then cancelled the scheduled rise
+     * and made $2/$10 permanent, which left two faults here: every Sonnet 5
+     * session would have silently repriced **50% higher on 2026-09-01** with
+     * nothing on the page to explain the jump, and until then any unrecognised
+     * Sonnet id was already being priced at the withdrawn $3/$15, because an
+     * inferred rate is the list rate and the list rate was the wrong number.
+     *
+     * The published cache columns confirm the base independently: Sonnet 5's
+     * cache hit is $0.20/MTok, which is 0.1x of $2 — at $3 it would be $0.30.
+     */
+    input: 2,
+    output: 10,
     context: 1_000_000,
     maxOutput: 128_000,
   },
@@ -134,16 +176,59 @@ const CATALOG = {
     context: 200_000,
     maxOutput: 64_000,
   },
+  // Retired on the first-party API and still published at $0.80/$4, so a
+  // transcript that used it can be priced exactly rather than inferred. Without
+  // this entry the id falls to the tier default and is charged at Haiku 4.5's
+  // $1/$5 — 25% over, flagged `inferred`, but wrong when the real rate is known.
+  // Note the old id order: `claude-3-5-haiku`, not `claude-haiku-3-5`.
+  'claude-3-5-haiku': {
+    name: 'Haiku 3.5',
+    tier: 'haiku',
+    input: 0.8,
+    output: 4,
+    context: 200_000,
+    maxOutput: 8_192,
+    legacy: true,
+  },
 };
 
 const CACHE_READ_MULTIPLIER = 0.1;
 const CACHE_WRITE_5M_MULTIPLIER = 1.25;
 const CACHE_WRITE_1H_MULTIPLIER = 2;
 
-/** Strip a date suffix (`claude-haiku-4-5-20251001`) down to the catalog key. */
+/**
+ * Pinning inference to the US costs 1.1x on **every** token category — input,
+ * output, cache writes and cache reads alike. Claude 4.6 and later only; earlier
+ * models reject the parameter, so it cannot appear on one of their requests.
+ */
+const GEO_US_MULTIPLIER = 1.1;
+
+/**
+ * Server-side web search: $10 per 1,000 searches, on top of the tokens the
+ * results turn into. The only charge in this app that a token count cannot see —
+ * it arrives as a request count in `server_tool_use`, and a total built purely
+ * from tokens omits it silently.
+ */
+const WEB_SEARCH_RATE = 10 / 1_000;
+
+/**
+ * Strip a date suffix (`claude-haiku-4-5-20251001`) down to the catalog key.
+ *
+ * `String(model)` rather than `model`, because this is fed ids that came out of
+ * JSON another program wrote. A transcript recording `"model": 12345` — a proxy
+ * or a gateway is free to put anything in that field — reached `.replace` on a
+ * number and threw, and the throw did not stay local: `withEconomics` is mapped
+ * over every session outside the scanner's per-transcript `try`, so one
+ * malformed id anywhere on disk emptied the entire index and the page showed
+ * nothing at all. `inferTier` below has always coerced; this did not, and the
+ * inconsistency was the bug.
+ *
+ * A value that coerces to nothing usable simply fails to match, which lands it
+ * in `unpriced` where invariant 5 says an unpriceable id belongs.
+ */
 function normalise(model) {
   if (!model) return null;
-  const bare = model.replace(/^anthropic\./, '');
+  const bare = String(model).replace(/^anthropic\./, '');
   if (CATALOG[bare]) return bare;
   const undated = bare.replace(/-\d{8}$/, '');
   return CATALOG[undated] ? undated : null;
@@ -232,44 +317,111 @@ export function lookupModel(model) {
     outputRate: promoActive ? entry.promo.output : entry.output,
     listInputRate: entry.input,
     listOutputRate: entry.output,
+    /**
+     * Null on every model without published fast-mode pricing, which is most of
+     * them. An inferred spec inherits its tier default's fast rates on purpose:
+     * fast mode is a premium, not a promotion, and declining to apply it to an
+     * unrecognised id would under-price a request that says it ran fast.
+     */
+    fastInputRate: entry.fastInput ?? null,
+    fastOutputRate: entry.fastOutput ?? null,
     promoUntil: promoActive ? entry.promo.until : null,
   };
 }
 
 /**
- * Cost in USD for one request's usage block.
- * `cacheWrite5m`/`cacheWrite1h` come from the transcript's `cache_creation`
- * split; when only a total is known, it is billed at the 5m rate.
+ * The rates one request is billed at, in dollars per token.
+ *
+ * The catalog gives the rate for a model; two things recorded on the request
+ * itself move it, and both were previously read past:
+ *
+ * **`speed: "fast"`** bills at the model's fast-mode rate — $10/$50 on Opus 5
+ * and Opus 4.8, double the standard card. On a model with no published fast rate
+ * the flag changes nothing, which is also what the API does (Opus 4.6 runs such
+ * a request at standard speed and bills it at standard rates).
+ *
+ * That literal is verified, not guessed: Claude Code's own request builder reads
+ * `t.speed === "fast" && { speed: "fast" }`, and the usage block it writes
+ * carries `speed: "standard"` on all 21,383 priced requests in the index here.
+ *
+ * **`inference_geo: "us"`** bills at 1.1x across every category, cache included.
+ * This one is weaker evidence and worth knowing about: `"us"` is the value the
+ * published pricing page names, but Claude Code validates the field as a plain
+ * nullable string and passes through whatever the API returned, and no request
+ * on this machine has ever been pinned — they all record `not_available`. So the
+ * multiplier is documented fact while the spelling that triggers it is not
+ * observed. If a pinned response turns out to say something else, this is the
+ * line to change; until then the check can only fire on the documented value,
+ * and anything that is not `"us"` is standard.
+ *
+ * Deliberately not modelled: `service_tier`. Batch is 50% off and priority
+ * publishes no multiplier at all, and neither can reach a Claude Code
+ * transcript — every request in the real index here is `standard`. Reading an
+ * unrecognised tier as standard can only ever overstate, which is the direction
+ * this app errs in by choice.
  */
-export function costOf(model, usage) {
+export function requestRates(model, usage = {}) {
   const spec = lookupModel(model);
   if (!spec) return null;
-  const inRate = spec.inputRate / 1_000_000;
-  const outRate = spec.outputRate / 1_000_000;
+  const fast = usage.speed === 'fast' && spec.fastInputRate != null;
+  const geo = usage.inferenceGeo === 'us' ? GEO_US_MULTIPLIER : 1;
+  return {
+    spec,
+    /** True only when the request ran fast *and* the model prices it. */
+    fast,
+    geoMultiplier: geo,
+    input: ((fast ? spec.fastInputRate : spec.inputRate) / 1_000_000) * geo,
+    output: ((fast ? spec.fastOutputRate : spec.outputRate) / 1_000_000) * geo,
+    /**
+     * Per search rather than per token, and no geo multiplier: the 1.1x is
+     * published for token categories, and a search is not one.
+     */
+    webSearch: WEB_SEARCH_RATE,
+  };
+}
+
+/**
+ * Cost in USD for one request's usage block, or for a slice of requests that
+ * share a model and the same billing terms.
+ *
+ * `cacheWrite5m`/`cacheWrite1h` come from the transcript's `cache_creation`
+ * split; when only a total is known, it is billed at the 5m rate. `speed` and
+ * `inferenceGeo` are read off the same usage — see `requestRates`.
+ */
+export function costOf(model, usage) {
+  const rates = requestRates(model, usage);
+  if (!rates) return null;
   return (
-    (usage.inputTokens ?? 0) * inRate +
-    (usage.outputTokens ?? 0) * outRate +
-    (usage.cacheReadTokens ?? 0) * inRate * CACHE_READ_MULTIPLIER +
-    (usage.cacheWrite5m ?? 0) * inRate * CACHE_WRITE_5M_MULTIPLIER +
-    (usage.cacheWrite1h ?? 0) * inRate * CACHE_WRITE_1H_MULTIPLIER
+    (usage.inputTokens ?? 0) * rates.input +
+    (usage.outputTokens ?? 0) * rates.output +
+    (usage.cacheReadTokens ?? 0) * rates.input * CACHE_READ_MULTIPLIER +
+    (usage.cacheWrite5m ?? 0) * rates.input * CACHE_WRITE_5M_MULTIPLIER +
+    (usage.cacheWrite1h ?? 0) * rates.input * CACHE_WRITE_1H_MULTIPLIER +
+    (usage.webSearchRequests ?? 0) * rates.webSearch
   );
 }
 
 /**
  * What the same work would have cost with no cache hits — the counterfactual
  * that makes the caching saving legible.
+ *
+ * Web search is charged here too, at the same figure. Caching has nothing to do
+ * with what a search costs, so carrying it on both sides keeps `saved` the
+ * caching delta and nothing else.
  */
 export function uncachedCostOf(model, usage) {
-  const spec = lookupModel(model);
-  if (!spec) return null;
-  const inRate = spec.inputRate / 1_000_000;
-  const outRate = spec.outputRate / 1_000_000;
+  const rates = requestRates(model, usage);
+  if (!rates) return null;
   const allInput =
     (usage.inputTokens ?? 0) +
     (usage.cacheReadTokens ?? 0) +
     (usage.cacheWrite5m ?? 0) +
     (usage.cacheWrite1h ?? 0);
-  return allInput * inRate + (usage.outputTokens ?? 0) * outRate;
+  return (
+    allInput * rates.input +
+    (usage.outputTokens ?? 0) * rates.output +
+    (usage.webSearchRequests ?? 0) * rates.webSearch
+  );
 }
 
 /** How close a request came to filling the model's context window. */
@@ -284,4 +436,10 @@ export function contextPressure(model, peakInputTokens) {
 }
 
 export const MODEL_IDS = Object.keys(CATALOG);
-export { CACHE_READ_MULTIPLIER, CACHE_WRITE_5M_MULTIPLIER, CACHE_WRITE_1H_MULTIPLIER };
+export {
+  CACHE_READ_MULTIPLIER,
+  CACHE_WRITE_5M_MULTIPLIER,
+  CACHE_WRITE_1H_MULTIPLIER,
+  GEO_US_MULTIPLIER,
+  WEB_SEARCH_RATE,
+};

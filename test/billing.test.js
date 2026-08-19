@@ -388,3 +388,53 @@ test('a few days of transcripts are flagged, not silently compared to a whole mo
   const settled = compareBilling({ apiEquivalent: 400, firstAt: now - 40 * DAY, lastAt: now, config });
   assert.equal(settled.partialPeriod, false);
 });
+
+/* ------------------------------------------------------------------ *
+ * Bounds
+ *
+ * `months` was capped from the start, with the reason written down: a typo in
+ * a box should not produce an absurd plan. The other two numeric fields were
+ * not, and the asymmetry had teeth.
+ * ------------------------------------------------------------------ */
+
+test('a typo in the seats box is clamped, the way a typo in months already was', () => {
+  assert.equal(sanitizePeriod({ planId: 'team', seats: 1e9 }).seats, 10_000);
+  assert.equal(sanitizePeriod({ planId: 'team', seats: 250 }).seats, 250, 'a real team is untouched');
+  assert.equal(sanitizePeriod({ planId: 'team', seats: 1 }).seats, 1);
+});
+
+test('a plan price cannot be made large enough to overflow the comparison', () => {
+  /**
+   * At 1e308 over 600 months `planCost` reached `Infinity`, and the two halves
+   * of the app then disagreed about the same config: the page reported
+   * `api-ahead` with a difference of `-Infinity`, which renders as an em dash
+   * ("costs — more than the usage"), while `shareFacts` ran it through
+   * `finite()`, got 0, and the share card said no plan was set at all.
+   */
+  const period = { planId: 'custom', monthlyOverride: 1e308, months: 600 };
+  assert.equal(sanitizePeriod(period).monthlyOverride, 1_000_000);
+
+  const billing = compareBilling({
+    apiEquivalent: 2_300,
+    firstAt: Date.parse('2026-06-01T00:00:00Z'),
+    lastAt: Date.parse('2026-08-01T00:00:00Z'),
+    config: { periods: [period] },
+  });
+  assert.ok(Number.isFinite(billing.planCost), `planCost is ${billing.planCost}`);
+  assert.ok(Number.isFinite(billing.difference));
+  assert.ok(Number.isFinite(billing.ratio));
+});
+
+test('every period at every ceiling still produces a finite total', () => {
+  // 24 periods is the cap, and all three fields at theirs is the largest config
+  // the sanitiser will ever hand to the arithmetic.
+  const maxed = Array.from({ length: 40 }, () => ({
+    planId: 'custom',
+    monthlyOverride: 1e308,
+    seats: 1e9,
+    months: 1e9,
+  }));
+  const { total, periods } = planTotal({ periods: maxed }, 1);
+  assert.equal(periods.length, 24, 'the period list is capped');
+  assert.ok(Number.isFinite(total), `total is ${total}`);
+});

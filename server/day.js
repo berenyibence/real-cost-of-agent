@@ -15,3 +15,28 @@ export function dayKey(ms) {
   const d = new Date(ms);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+
+/** Eleven years. A malformed range must not spin here. */
+const MAX_SPAN_DAYS = 4_000;
+
+/**
+ * Every local calendar date from `fromKey` to `toKey`, inclusive.
+ *
+ * Stepped with `setDate` rather than by adding 86,400,000ms. The arithmetic
+ * version drifts across a daylight-saving boundary — one day of the year comes
+ * out 23 hours long and the sequence either repeats a date or skips one, which
+ * in a chart is an off-by-one that only appears twice a year.
+ */
+export function eachDay(fromKey, toKey) {
+  const [y, m, d] = String(fromKey).split('-').map(Number);
+  if (!y || !m || !d) return [];
+  const cursor = new Date(y, m - 1, d);
+  const out = [];
+  for (let i = 0; i < MAX_SPAN_DAYS; i++) {
+    const key = dayKey(cursor.getTime());
+    out.push(key);
+    if (key >= String(toKey)) break;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
+}

@@ -66,5 +66,5 @@
 
   <!-- Footer -->
   <text class="mono" x="78" y="586" font-size="19" font-weight="500" fill="#a5adff">github.com/berenyibence/real-cost-of-agent</text>
-  <text class="sans" x="1202" y="586" font-size="19" text-anchor="end" fill="#67718a">runs locally · no account · no API key</text>
+  <text class="sans" x="1202" y="586" font-size="19" text-anchor="end" fill="#67718a">runs locally · nothing to sign up for</text>
 </svg>

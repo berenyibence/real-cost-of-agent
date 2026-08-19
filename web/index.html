@@ -4,15 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Real Cost of Agent — what your agent would have cost</title>
-    <meta name="description" content="Prices the transcripts Claude Code already writes to your disk. Local, no account, no API key." />
+    <meta name="description" content="Prices the transcripts Claude Code already writes to your disk. Runs locally, nothing to sign up for." />
     <link rel="stylesheet" href="/styles.css" />
     <link rel="icon" href="/brand/mark.svg" type="image/svg+xml" />
-    <script>
-      /* Set before first paint, so a light-theme user never sees a dark flash. */
-      const stored = localStorage.getItem('real-cost-of-agent-theme');
-      const preferred = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-      document.documentElement.dataset.theme = stored ?? preferred;
-    </script>
+    <!-- Blocking, and in the head, so the theme is on the document before the
+         first paint. A separate file rather than an inline block, so the CSP
+         this is served with needs no script hash to stay correct. -->
+    <script src="/theme.js"></script>
   </head>
   <body>
     <div class="page">

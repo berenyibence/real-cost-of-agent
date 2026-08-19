@@ -11,6 +11,7 @@ import http from 'node:http';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { requestAllowed } from './access.js';
 import { getIndex, refresh, startWatching } from './store.js';
 import { CLAUDE_DIR, claudeCodeFound } from './scan.js';
 import { spendBreakdown } from './spend.js';
@@ -31,12 +32,49 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+/**
+ * The promise in the README, written as a header the browser enforces.
+ *
+ * The "no network calls, ever" invariant says this project makes no network call — no CDN script, no
+ * remote font, no analytics beacon. Until now that was a property of the source
+ * that a reader had to take on trust, and that a careless patch could lose
+ * without any test noticing. `default-src 'self'` makes the browser refuse it
+ * instead: a script, style, font or image from anywhere but this server does
+ * not load, and `connect-src 'self'` means a `fetch` to somewhere else fails in
+ * the console rather than silently succeeding.
+ *
+ * The share panel is unaffected. Its platform links are top-level navigations
+ * to a new tab, which no fetch directive governs — `form-action 'none'` is
+ * about form posts, and there are no forms here.
+ *
+ * `frame-ancestors 'none'` is the one that is not about outbound traffic: it
+ * stops a page in another tab framing this one, which is the clickjacking half
+ * of the same confused-deputy problem `access.js` handles for fetches.
+ */
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "img-src 'self'",
+  "font-src 'self'",
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+].join('; ');
+
 function send(res, status, body) {
   const json = JSON.stringify(body);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(json),
     'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    // An API response is not a document, but it is one navigation away from
+    // being rendered as one, and `nosniff` above only helps if the type is
+    // honoured. Costs nothing to say both.
+    'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
   });
   res.end(json);
 }
@@ -75,7 +113,15 @@ async function readJson(req) {
  * match for `..` is the version that has to be right about every spelling.
  */
 async function serveStatic(res, pathname) {
-  const rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
+  let rel;
+  try {
+    rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
+  } catch {
+    // `/%` and other malformed percent-encoding. That is a bad request, not a
+    // fault in this server, and a 500 would say the opposite.
+    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' }).end('bad request');
+    return;
+  }
   const file = path.resolve(WEB_DIR, rel);
   if (file !== WEB_DIR && !file.startsWith(WEB_DIR + path.sep)) {
     res.writeHead(403).end('forbidden');
@@ -87,6 +133,8 @@ async function serveStatic(res, pathname) {
       'content-type': MIME[path.extname(file)] ?? 'application/octet-stream',
       'content-length': body.length,
       'x-content-type-options': 'nosniff',
+      'content-security-policy': CSP,
+      'referrer-policy': 'no-referrer',
       'cache-control': 'no-cache',
     });
     res.end(body);
@@ -96,6 +144,14 @@ async function serveStatic(res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
+  // A local server with no auth is still reachable by any page you happen to be
+  // looking at. See `access.js` — this is the whole defence.
+  if (!requestAllowed(req.headers)) {
+    return send(res, 403, {
+      error: 'this server answers only to a loopback or IP host, from its own origin',
+    });
+  }
+
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
   const { pathname } = url;
 

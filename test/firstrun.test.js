@@ -49,7 +49,7 @@ test('the whole payload is finite when there is no data at all', () => {
   assert.ok(Number.isFinite(breakdown.lastAt), `lastAt is ${breakdown.lastAt}`);
   assert.equal(breakdown.total, 0);
   assert.equal(breakdown.unpriced.sessions, 0);
-  assert.deepEqual(breakdown.topSessions, []);
+  assert.deepEqual(breakdown.bySession, []);
 
   for (const [key, value] of Object.entries(billing)) {
     if (typeof value === 'number') assert.ok(Number.isFinite(value), `billing.${key} is ${value}`);
@@ -68,3 +68,43 @@ test('an empty index still serialises', () => {
 });
 
 test.after(() => fsp.rm(empty, { recursive: true, force: true }));
+
+/* ------------------------------------------------------------------ *
+ * The state between "nothing installed" and "something to show"
+ * ------------------------------------------------------------------ */
+
+test('an empty projects directory is a third state, not the same as no directory', async () => {
+  /**
+   * `claudeCodeFound()` only ever meant "the directory is there". A fresh Claude
+   * Code install creates `~/.claude/projects` before it writes any transcript
+   * into it, and so does clearing the folder out — and in that state the page
+   * skipped its empty state entirely and rendered a comparison of zeros: six $0
+   * component rows, a chart with no columns under two blank axis labels, and a
+   * plan panel arguing about nothing.
+   *
+   * The page needs to tell three things apart, so the payload has to carry
+   * enough to do it: no directory, a directory with nothing in it, and real
+   * work. This asserts the two flags it decides on.
+   */
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'rcoa-firstrun-'));
+  await fsp.mkdir(path.join(home, 'projects'), { recursive: true });
+
+  const previous = process.env.CLAUDE_HOME;
+  process.env.CLAUDE_HOME = home;
+  // `scan.js` resolves CLAUDE_HOME at import, so this needs its own module copy.
+  const scanner = await import(`../server/scan.js?empty-projects=${Date.now()}`);
+
+  assert.equal(scanner.claudeCodeFound(), true, 'the directory exists');
+  const { sessions, workspaces } = await scanner.scan();
+  assert.deepEqual(sessions, [], 'and holds no transcripts');
+  assert.deepEqual(workspaces, []);
+
+  // Together these two are what the page branches on: found-but-empty is the
+  // case that used to fall through to the dashboard.
+  const breakdown = spendBreakdown(sessions, workspaces);
+  assert.equal(breakdown.total, 0);
+  assert.deepEqual(breakdown.byDay, [], 'no days to draw a chart from');
+
+  process.env.CLAUDE_HOME = previous;
+  await fsp.rm(home, { recursive: true, force: true });
+});

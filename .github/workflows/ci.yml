@@ -68,7 +68,25 @@ jobs:
           curl -fsS http://127.0.0.1:4319/            > /dev/null
           curl -fsS http://127.0.0.1:4319/app.js      > /dev/null
           curl -fsS http://127.0.0.1:4319/share.js    > /dev/null
+          curl -fsS http://127.0.0.1:4319/theme.js    > /dev/null
           curl -fsS http://127.0.0.1:4319/brand/mark.svg > /dev/null
+
+          # The "no network calls, ever" invariant — as something the browser enforces
+          # rather than something the source merely happens to do. A CDN script
+          # or an analytics beacon added later fails here first.
+          csp=$(curl -fsS -D - -o /dev/null http://127.0.0.1:4319/ | tr -d '\r' | grep -i '^content-security-policy:')
+          echo "$csp"
+          echo "$csp" | grep -q "default-src 'self'"
+          echo "$csp" | grep -q "connect-src 'self'"
+          echo "$csp" | grep -q "frame-ancestors 'none'"
+
+          # The theme is a file, not an inline block, precisely so the policy
+          # above needs no script hash. An inline script would silently stop
+          # running under it, and the page would flash the wrong theme.
+          if grep -q '<script>' web/index.html; then
+            echo "::error file=web/index.html::inline script would be blocked by the CSP"
+            exit 1
+          fi
           # Nothing outside web/ is served, in either spelling. Both currently
           # 404: the WHATWG URL parser resolves dot segments, and treats %2e as
           # a dot while doing it, so neither reaches the containment check in
@@ -81,4 +99,35 @@ jobs:
             test "$code" != 200
             grep -q 'real-cost-of-agent' /tmp/body && { echo "::error::served $path"; exit 1; } || true
           done
+
+          # A fresh Claude Code install has the directory and no transcripts in
+          # it. That is a different first run from "no directory at all", and it
+          # used to be the one that rendered a dashboard full of zeros.
+          mkdir -p /tmp/empty-claude/projects
+          curl -fsS http://127.0.0.1:4319/api/refresh -X POST -H 'Content-Type: application/json' -d '{}' >/dev/null
+          spend=$(curl -fsS http://127.0.0.1:4319/api/spend)
+          echo "$spend" | grep -q '"found":true' || { echo "::error::projects/ exists but found is false"; exit 1; }
+          echo "$spend" | grep -q '"sessions":0' || { echo "::error::expected no sessions"; exit 1; }
+          echo "empty projects/ -> found:true sessions:0, the page's third state"
+
+          # The front door. `test/access.test.js` covers the predicate; this
+          # covers it actually being wired into the request path, which is the
+          # part a refactor can quietly drop.
+          rebind=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example:4319' http://127.0.0.1:4319/api/spend)
+          echo "Host: evil.example -> $rebind"
+          test "$rebind" = 403
+
+          csrf=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Origin: https://evil.example' -H 'content-type: text/plain' \
+            -d '{"planId":"none"}' http://127.0.0.1:4319/api/billing)
+          echo "cross-site POST /api/billing -> $csrf"
+          test "$csrf" = 403
+
+          # And the documented way of running it still works, in both spellings.
+          for host in 127.0.0.1 localhost; do
+            ok=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $host:4319" http://127.0.0.1:4319/api/spend)
+            echo "Host: $host -> $ok"
+            test "$ok" = 200
+          done
+
           kill $server

@@ -61,8 +61,56 @@ const payload = {
   ],
   byModel: [{ id: 'claude-opus-5', name: 'Claude Opus 5', cost: 1284.42 }],
   byDay: [{ id: '2026-07-01', date: '2026-07-01', cost: 1284.42 }],
-  topSessions: [
-    { id: 's1', name: 'Fix the payroll export before Sunday', project: 'acme-billing-rewrite', cost: 210.5 },
+  // The richest rows on the payload, and so the ones with most to leak: a
+  // session title is whatever the user typed first, and the project name is the
+  // directory it ran in. Seeded here in full, with the token detail that now
+  // travels alongside them, so the allowlist is tested against the real shape
+  // rather than a thinner ancestor of it.
+  bySession: [
+    {
+      id: 's1',
+      name: 'Fix the payroll export before Sunday',
+      project: 'acme-billing-rewrite',
+      model: 'Claude Opus 5',
+      models: 2,
+      inferred: false,
+      cost: 210.5,
+      uncachedCost: 640.2,
+      share: 0.164,
+      requests: 412,
+      tokens: 96_400_000,
+      input: 840_000,
+      output: 1_200_000,
+      cacheRead: 92_000_000,
+      cacheWrite: 2_360_000,
+      searches: 14,
+      startedAt: 1_781_000_000_000,
+      endedAt: 1_781_009_000_000,
+      cacheHitRate: 0.966,
+      contextRatio: 0.71,
+    },
+    {
+      id: 's2',
+      name: 'stripe-migration cleanup',
+      project: 'stripe-migration',
+      model: 'Claude Haiku 4.5',
+      models: 1,
+      inferred: true,
+      cost: 12.4,
+      uncachedCost: 30.1,
+      share: 0.01,
+      requests: 38,
+      tokens: 4_100_000,
+      input: 120_000,
+      output: 240_000,
+      cacheRead: 3_600_000,
+      cacheWrite: 140_000,
+      searches: 0,
+      startedAt: 1_781_100_000_000,
+      endedAt: 1_781_101_000_000,
+      cacheHitRate: 0.87,
+      contextRatio: 0.22,
+    },
   ],
   billing: {
     authMode: 'subscription',
@@ -411,6 +459,46 @@ test('a malformed payload produces finite numbers rather than $NaN', () => {
   assert.deepEqual(f.split, []);
   assert.equal(shareText(f, { tone: 'short' }).includes('NaN'), false);
   assert.equal(shareText(f, { tone: 'long' }).includes('NaN'), false);
+});
+
+test('a plan with no usable ratio is described without one, not with a crash', () => {
+  /**
+   * The panel is built inside `render()`, so anything thrown while composing a
+   * post takes the whole page down with it — `#root` is emptied first and never
+   * refilled. A blank application is a much worse outcome than a post that
+   * declines to state a multiple.
+   *
+   * `ratio` is null whenever there is nothing usable to divide, and a plan can
+   * be set at the same time. The old test only ever passed `billing: {}`, which
+   * left `hasPlan` false and took the guarded branch every time.
+   */
+  for (const ratio of [undefined, null, NaN, 0, -1, Infinity]) {
+    const f = shareFacts({
+      total: 100,
+      components: [],
+      meta: { found: true, sessions: 3, workspaces: 2 },
+      billing: {
+        planCost: 50,
+        ratio,
+        declaredMonths: 1,
+        months: 1,
+        verdict: 'plan-ahead',
+        planLabel: 'Claude Pro',
+      },
+    });
+
+    for (const angle of ANGLES) {
+      for (const part of ['headline', 'caption', 'number', 'eyebrow']) {
+        const text = angle[part](f);
+        assert.equal(typeof text, 'string', `${angle.id}.${part} with ratio ${ratio}`);
+        assert.ok(!/NaN|undefined|null/.test(text), `${angle.id}.${part} says "${text}"`);
+      }
+      for (const tone of ['short', 'long']) {
+        const post = shareText(f, { tone, angle: angle.id });
+        assert.ok(!/NaN|undefined|null/.test(post), `${angle.id}/${tone} says "${post}"`);
+      }
+    }
+  }
 });
 
 test('money in a post is written out, not abbreviated into someone else‘s rounding', () => {

@@ -2,6 +2,366 @@
 
 Notable changes, newest first. Dates are the day the change landed on `main`.
 
+## Unreleased
+
+### Fixed
+
+- **Subagent work was billed to nobody.** Claude Code gives every subagent its own transcript, one
+  directory below the session that spawned it —
+  `projects/<encoded-cwd>/<sessionId>/subagents/agent-<id>.jsonl`. Those lines carry their own
+  `requestId` and their own `usage` block, because they were their own API calls. The scanner read
+  only the top level of each project directory, so none of it reached any figure in the app.
+
+  This is the same failure as the twelve-row session list below, in its most invisible form. That
+  one at least had a heading you could hold against it; this had nothing at all — every cut still
+  summed to the total, because the missing money never arrived in any of them. Nothing on the page
+  was wrong-looking, and nothing could be. The error scales with how much you delegate, so the
+  people it understated most were the ones using the feature hardest.
+
+  Subagent transcripts are now folded into the session that spawned them, which is where their cost
+  belongs: the same run, the same project, the same day. The session's own transcript keeps naming
+  the row — a subagent's opening line is the task it was handed, not anything a person typed — and
+  each subagent's requests become their own billing slice, so a Haiku search inside an Opus session
+  is priced as Haiku rather than absorbed into the parent's rate. A subagent whose parent transcript
+  has been deleted still gets counted, because a missing parent does not un-bill the work. See
+  [`test/subagents.test.js`](test/subagents.test.js).
+
+- **A fresh install got a dashboard of zeros instead of the empty state written for it.**
+  `claudeCodeFound()` only ever meant "the directory is there", and Claude Code creates
+  `~/.claude/projects` before it writes a transcript into it — as does clearing the folder out. In
+  that state the page skipped its empty state entirely and rendered a comparison of nothing: six $0
+  component rows, a chart with no columns under two blank axis labels, a plan panel arguing about
+  zero, and a subtitle reading "0 sessions across 0 projects".
+
+  There are three states, not two, and the two empty ones want different sentences: "I could not
+  find where your transcripts live" is a different problem from "I found where they live and there
+  are none yet", and only the first is worth mentioning `CLAUDE_HOME` for. Both are now written and
+  both now fire. A cut with no rows at all also falls through to "Nothing to split here yet" rather
+  than drawing an empty chart — reachable with real sessions on disk, if every one of them used a
+  model nothing could price.
+
+- **The one animation that ignored `prefers-reduced-motion`.** The blanket rule in `styles.css`
+  flattens CSS animations and transitions, and cannot reach a scroll asked for in JavaScript. The
+  header's share button now checks the preference before scrolling smoothly.
+
+- **A gateway id in a session threw away the priceable work beside it.** `primaryModel` took the
+  busiest slice outright, and when the catalog could not price it fell back to `session.model` —
+  whichever id answered *last*, which on these sessions is the same unpriceable one. `modelSpec`
+  came out null and the **whole session dropped to `unpriced`**, including every exactly-priceable
+  Claude token in it.
+
+  What made it a bug rather than a policy is that the answer turned on nothing meaningful: the same
+  tokens across the same two models priced at **$0.00 or $27.51 depending only on which slice held
+  more requests.** Busiest-is-unpriceable threw the session away; busiest-is-Opus priced it and
+  folded the unknown slice onto Opus's rate. One of those had to be wrong, and request ordering
+  picked which one you saw. The headline model is now the busiest one that *can* be priced, so a
+  session is priced whenever any part of it is.
+
+  The slices that still cannot be priced are folded onto that rate, which is a real assumption and
+  is now declared as one: `fallbackPricedSessions` on the payload, a sentence in the caveats box, and
+  a **borrowed rate** pill on the session row. It is counted separately from `inferredSessions`
+  because it is a larger guess — an inferred rate at least had a tier in the id to reason from, this
+  one borrows a rate from elsewhere in the same session. A session with nothing priceable in it is
+  still excluded and still counted, exactly as before. See
+  [`test/gateway-models.test.js`](test/gateway-models.test.js).
+
+- **One bad clock deleted most of the by-day breakdown.** `spendBreakdown` built the day list by
+  walking `eachDay(first, last)` and looking each date up, which quietly made the *axis* the
+  authority on which days existed. `eachDay` stops after `MAX_SPAN_DAYS`, so a single transcript
+  carrying a future timestamp — a skewed clock, or a `~/.claude` copied off a machine that had one —
+  put the last day eleven years out and **dropped every real bucket past the cap: 71% of the total
+  gone from that cut**, under a heading promising a breakdown, while every other cut still agreed
+  with the total. Invariant 1 failing exactly the way the twelve-row session list used to.
+
+  The buckets are the authority now and the filler is added around them, so a day that cost money
+  cannot be absent whatever the axis manages to cover. Separately, the scanner refuses to record a
+  session as having ended after now — the same treatment a session with no timestamps already gets —
+  which also stops one skewed file swelling the payload from 3KB to half a megabyte of empty
+  columns. See [`test/timestamps.test.js`](test/timestamps.test.js).
+
+- **A plan could be made expensive enough to break the comparison.** `months` was capped from the
+  start, with the reason written down; `seats` and `monthlyOverride` were not. A fat-fingered
+  `1000000000` in the seats box produced a $360bn plan, and at 1e308 `planCost` overflowed to
+  `Infinity` — at which point the two halves of the app told **different stories about the same
+  config**: the page reported `api-ahead` with a difference of `-Infinity`, rendering as "costs —
+  more than the usage", while `shareFacts` ran it through `finite()`, got 0, and the share card said
+  no plan was set at all. Both are clamped now, the way months always was.
+
+- **Auth detection sampled the wrong sixty files.** Telemetry filenames are UUIDs, so directory
+  order has nothing to do with time, and `slice(0, 60)` took an arbitrary historical sample. For
+  anyone who had switched from an API key to a subscription it got the answer flatly wrong — the
+  tally requires `oauth >= apiKey`, so months of old key-authenticated telemetry outvoted the recent
+  truth, and the page told them the list-rate figure was "what you were actually metered". It now
+  samples newest-first.
+
+- **The rescan button never re-read the telemetry.** `/api/billing?refresh=1` has existed to bust
+  the auth cache since auth detection was written, and nothing ever called it — so a user who
+  switched auth mode kept the old answer until they restarted the server. "Re-read transcripts" now
+  re-reads that too.
+
+- **One badly-typed model id emptied the entire index.** `lookupModel` called
+  `String.prototype.replace` on whatever the transcript recorded, so a line carrying
+  `"model": 12345` — which a proxy or a gateway is free to write — threw a `TypeError`. The throw
+  did not stay local: `withEconomics` is mapped over every session in `store.js`, outside the
+  scanner's per-transcript `try`, so **one malformed id anywhere on disk produced a page with
+  nothing on it**. `inferTier` beside it had always coerced; the inconsistency was the bug. An
+  unusable id is now excluded and counted in `unpriced`, which is what invariant 5 always said
+  should happen to it, and `scan.js` refuses a non-string id at the point it reads vendor JSON.
+  See [`test/malformed.test.js`](test/malformed.test.js).
+
+- **The share panel could take the whole page down with it.** `f.ratio` is null whenever there is
+  no usable multiple to state. `number` guarded that; the "Value" headline and the "Run rate"
+  caption did not, and read `.toFixed` off it. Because the panel is built inside `render()`, the
+  resulting `TypeError` escaped past `#root.replaceChildren()` and left a **blank application**
+  rather than a missing panel. In the shipped app two other modules happen to guarantee a positive
+  ratio there, which is exactly the kind of invariant that gets inherited by the next angle somebody
+  adds. Both sites now say nothing rather than build a sentence out of a null.
+
+- **The panel pointed at a layout instead of naming the figures.** "The figure on the left … the one
+  beside it" describes a three-column grid, and below 720px those cells stack — so on a phone the
+  sentence directed the reader at positions that were not there. It names the two figures now.
+
+- **A clipped name had nowhere else to be read.** `.name` is `text-overflow: ellipsis`, and a
+  session or project title wide enough to truncate appeared in full nowhere on the page. Every row
+  now carries the untruncated name as its `title`.
+
+- **The faintest text failed WCAG AA in both themes.** `--text-faint` was 3.6:1 on dark and 3.0:1 on
+  light, against the 4.5:1 that normal-size text needs — and it is the tier carrying the session
+  facts line, the chart axis, the footers and every "N of M" count. It is now 4.7:1 and 4.9:1. Faint
+  is a hierarchy, not a licence to stop being readable.
+
+- **The by-day chart said everything through hover.** The columns carry their date and amount in a
+  `title`, which is nothing at all on a touch screen or to a screen reader. The chart is now a
+  labelled `role="img"` stating the span, how many days ran, and the peak.
+
+- **"By day" showed thirty columns and did not say so.** The chart windows to the most recent thirty
+  days, which is right — sixty columns on a phone is a grey smear — but it was a truncation
+  performed silently, under a heading that said "By day". On the index this was found against that
+  was **$693 of $2,294, 30% of the money, with nothing on screen to indicate the chart was not the
+  whole history.** It now carries the same footer the session list does, naming both figures.
+
+- **A plan price could not have a decimal point in it.** The `$/mo` box is `type="number"`, which
+  defaults to `step="1"` — so $17.00, a grandfathered rate, or any tier converted out of another
+  currency loaded as an invalid value and had its decimals rounded away by the spinner arrows. The
+  box that exists precisely because *published prices are not your price* would not accept most of
+  the prices people actually pay. Seats and months still step by whole numbers, because those are
+  whole things.
+
+- **The page and the share card wrote the same number two ways.** The card has always grouped
+  thousands — `$2,288` — and the page printed `$2288`. Money on the page is now grouped as well, and
+  a negative figure no longer collapses to `<$0.01`, which is what an unsigned magnitude test made
+  of every amount below zero.
+
+- **"By session" showed twelve rows and called itself a breakdown.** Every other cut on the page
+  re-splits the whole total; this one was capped at the twelve most expensive sessions, with nothing
+  on screen to say so. On the index it was developed against that was **$1,231 of $2,261 — 45.5% of
+  the money had no row anywhere in the application**, and the remaining 55 sessions could not be
+  reached at all.
+
+  This is invariant 1 failing quietly, which is the failure this project exists to catch: a column
+  that answers a smaller question than its heading asks, and looks right while doing it. The cut is
+  now every priced session, it sums to the total like the other four, and `test/spend.test.js`
+  includes it in the loop that asserts exactly that — so the cap cannot come back without a test
+  going red.
+
+- **A resumed session reported its wall-clock gap as a duration.** First-to-last timestamp is not
+  time spent: one session here spans twelve days because it was picked up again the following week,
+  and the row printed `287h 54m` beside its request count, where it reads as twelve days of work. An
+  elapsed figure is now shown only when it is one — within a single local day — and a session that
+  crosses days shows the date range instead, which cannot be misread.
+
+### Added
+
+- **A Content-Security-Policy, so "no network calls" is enforced rather than promised.** Invariant 8
+  has always been true of the source and has always been checkable only by reading it. It is now a
+  header: `default-src 'self'` with `connect-src 'self'`, so a CDN script, a remote font, an
+  analytics beacon or a `fetch` to anywhere but this server is refused by the browser rather than
+  merely absent by convention. `frame-ancestors 'none'` closes the clickjacking half of the
+  confused-deputy problem `access.js` already handles for fetches.
+
+  The theme script moved out of `index.html` into `web/theme.js` to make this a flat
+  `script-src 'self'` with no hash in it. A hash is the version that works until somebody edits the
+  script and does not regenerate it, and this project has no build step that could. CI asserts both
+  the header and the absence of an inline block.
+
+- **The token counts behind every session's dollar figure.** Each row carries fresh input, output,
+  cache reads and cache writes separately — four numbers because they are billed at four different
+  multipliers, so a single "tokens" total would hide the entire reason two sessions of the same size
+  cost different amounts. Searches appear as their own labelled count when a session ran any, since
+  they are billed per search rather than per token.
+
+  These are the measured quantities every price on the page is derived from, and printing them is
+  what makes a row checkable rather than merely believable. A new test asserts they agree with the
+  components cut, which splits the same tokens the other way.
+
+- **The API request count per session**, which the scanner has always measured and the page has
+  always thrown away. It is the denominator for what a single request cost, and the thing that makes
+  a short session comparable to a long one.
+
+- **Controls, so the list can afford to be complete.** A filter over session and project names, sort
+  by cost, recency, output, total tokens or requests, and a reveal that starts at 25 rows. The footer
+  states what is on screen and what it is out of, in both rows and dollars — the old list said
+  neither, which is how twelve rows could look like the whole story.
+
+- **The same token split on every bucket, so "by model" can say _why_.** A model row showing one
+  dollar figure and a session count invites exactly one question and cannot answer it: output at
+  twenty times the input rate and a cache being rebuilt rather than read are completely different
+  stories that look identical in a single total. By model, by project and by day now all carry fresh
+  input, output, cache read and cache write separately, and `tokens` is derived from that split
+  rather than accumulated beside it, so the two cannot drift.
+
+### Fixed (interface)
+
+- **The sort control did not show which sort was selected.** `segmented` bakes the active id in when
+  it builds, and the repaint only rebuilt the list — so clicking "Recent" reordered the rows while
+  the highlight stayed on "Cost". The buttons are now rebuilt with the list.
+
+- **"Show more" redrew bars that were already on screen.** The bar scale was taken from the visible
+  slice, so revealing a row more expensive than anything above it rescaled the whole list and a
+  figure the reader had already taken in silently changed length. The scale now comes from every row
+  the filter matched. Filtering still rescales, and should — a filter changes the question, so it
+  changes what "the biggest" means; revealing more of the same answer does not.
+
+- **The cut picker jumped when you switched cuts.** The hints differ in length by a factor of three,
+  and the longest pushed the picker onto a second row — one header stood 91px tall against 61px for
+  every other cut. The hint now takes the slack and ellipsizes, with the full sentence on hover. The
+  fix is a `0` flex basis rather than `auto`: with `flex-wrap`, line breaking is decided from each
+  item's hypothetical size *before* anything shrinks, so an `auto` basis let the hint claim its full
+  content width and wrap the picker before shrinking could happen.
+
+- **The share card's footer read as a spec sheet.** "no account · no API key" is a list of things
+  that are absent, which invites the question of why either was ever on the table. It now says
+  "nothing to sign up for", which is what it was promising.
+
+### Changed
+
+- **"Saved" is the default share angle, ahead of "Value".** A dollar figure is the one number a
+  reader understands without being told what it is a ratio *of* — a multiple has to be explained
+  before it can land, and a post that needs a sentence of setup is a post nobody finishes. The card
+  now opens on `$1,644` rather than `3.6×`.
+
+- **The README leads with a result rather than a `git clone`.** It asked for a checkout of an unknown
+  repository two lines before it gave a single number. The headline figures, the panel, and the
+  2.45× line-counting trap now come first; the install block follows them. The by-model shot also
+  comes out of the collapsed section, because a token split per model is the thing that makes the
+  bill arguable rather than merely readable.
+
+### Documentation
+
+- **The screenshots were two releases stale**, showing a cut label that no longer exists ("What the
+  tokens were") and missing the web search component entirely. All re-shot, with a new one for the
+  session cut.
+
+## 0.5.0 — 2026-08-10
+
+Every dollar figure this app has ever printed was too high. This is the release that fixes it.
+
+### Fixed
+
+- **One API call is billed once, not once per content block.** Claude Code writes a single assistant
+  turn as several transcript lines — one for the `thinking` block, then one per `tool_use` — and
+  **every one of those lines carries a complete copy of the same `usage` object.** The reader summed
+  usage line by line, so a request was charged once for each block it happened to contain. On the
+  corpus this was found against that was 21,131 lines for 10,422 real calls, and the headline came
+  out at **$6,091 against a true $2,490 — overstated by 2.45×.**
+
+  The error scaled with tool use, so the heaviest sessions were the most wrong, and it ran in the
+  direction that flatters the tool. Nothing on the page suggested checking: every breakdown summed
+  to the total perfectly, because they were all splitting the same inflated number. `scan.js` now
+  keys usage by `requestId` (falling back to `message.id`) per transcript and folds each call in
+  once. A line carrying neither id is still counted on its own — an unidentifiable call happened
+  too, and dropping it would be the same mistake pointing the other way.
+
+  Anyone who has quoted a number from this tool should re-run it. `test/dedupe.test.js` is the
+  fixture, copied from a real transcript.
+
+- **Sonnet 5's introductory price had become its standard price, and the catalog had not noticed.** It
+  was carried as $3/$15 with a $2/$10 promotion expiring 2026-08-31. Anthropic cancelled the
+  scheduled rise and made $2/$10 permanent, which left the entry wrong in two directions: on
+  2026-09-01 every Sonnet 5 session would have **silently repriced 50% higher**, with nothing on the
+  page to explain the jump; and until then any unrecognised Sonnet id was already priced at the
+  withdrawn $3/$15, because an inferred rate is the list rate. The published cache columns are what
+  settle it — Sonnet 5's cache hit is $0.20/MTok, which is 0.1× of $2, not of $3.
+
+  The whole rate card is now asserted against the published figures in `test/pricing.test.js`,
+  base rates *and* cache columns, so a base that disagrees with its own cache column cannot pass.
+  A third test rejects any entry whose price depends on what day it is read. Verified against
+  platform.claude.com on 2026-08-11; the cache multipliers (1.25× / 2× / 0.1×) were already exact.
+
+- **A model is not the whole rate, and two of the three things that move it were being read past.**
+  The catalog answered "what does Opus 5 cost" and that answer was applied to every Opus 5 request.
+  But the same request costs a different amount depending on fields the transcript already records:
+
+  - **Fast mode is billed at its own published rate, not the standard one.** `/fast` runs Opus 5 and
+    Opus 4.8 at $10/$50 instead of $5/$25 — **exactly double** — and every request that used it
+    records `speed: "fast"` in its usage. Pricing those off the standard column halves them. This is
+    the same class of error as the per-line one above and a single keystroke away from any user's
+    figures: it was invisible here only because this machine's 21,383 priced requests are all
+    `standard`. The cache multipliers stack on the fast base, so a 1h write on fast Opus 5 is 2× of
+    $10. A model with no published fast rate ignores the flag, which is what the API does too.
+  - **US-pinned inference costs 1.1× on every category**, cache reads and writes included, and is
+    recorded as `inference_geo`. Anything that is not `"us"` is standard, so an ordinary account's
+    `not_available` cannot inflate anything.
+
+  A usage slice is now keyed by the model **and** these terms, because a session that toggled
+  `/fast` mid-run is one model at two prices; `componentsOf` decomposes each slice at the rate it was
+  billed at, so the columns cannot drift from the total the way they did in 0.5.0's other fix.
+  `test/rates.test.js` prices a fixture transcript that mixes all of it, end to end.
+
+  Deliberately not modelled, and now written down in `models.js`: `service_tier`. Batch is 50% off
+  and priority publishes no multiplier at all, and neither can reach a Claude Code transcript.
+  Reading an unrecognised tier as standard can only overstate, which is the direction to err in.
+
+- **Web search was money spent on this machine that no figure mentioned.** Server-side search is
+  $10 per 1,000 searches on top of the tokens the results become, and it arrives as a count in
+  `server_tool_use` rather than as tokens — so a total assembled from token counts omits it, and
+  omits it silently. It is now a component of its own, in searches rather than tokens, so it is
+  inside the total that every breakdown has to sum to. Web fetch sits in the same block and is
+  published at no charge; charging for it would be inventing a rate.
+
+  Component rows accordingly carry `count` and `unit` where they carried `tokens`. The token columns
+  still total tokens: a per-search charge folded into "output" would balance the books and misstate
+  what was bought.
+
+- **Claude Haiku 3.5 is in the catalog** at its published $0.80/$4. It was falling through to the
+  Haiku tier default and being charged at Haiku 4.5's $1/$5 — 25% over. Flagged as inferred, so not
+  silent, but there is no reason to guess at a rate that is published. Marked `legacy`, so it never
+  becomes what an unknown Haiku is priced at. Note the id order: `claude-3-5-haiku`.
+
+- **The by-day chart no longer draws a fortnight's gap the same width as a night's.** `byDay` only
+  had rows for days something ran, so scattered sessions were rendered as if they were consecutive.
+  It now carries a row per calendar day across the span, idle days included, drawn as a baseline
+  tick rather than a stub that reads as a little bit of spend. The filled rows cost zero, so every
+  breakdown still sums to the total. The chart also scales to the maximum of the thirty days it is
+  showing rather than of all history, which had made the visible bars a fraction of their height
+  with nothing on screen to explain why.
+
+### Added
+
+- **The server checks who is talking to it** (`server/access.js`). There is no authentication and
+  there should not be, but a local page with none is still reachable by any site you happen to be
+  visiting, and `/api/spend` carries project names, working directories and session titles. A `Host`
+  header naming a domain is refused, which ends DNS rebinding — a browser cannot be induced to send
+  a host it did not resolve. A cross-site `Origin` is refused, which ends the silent plan rewrite
+  that `POST /api/billing` was open to, since `content-type: text/plain` makes it a CORS *simple*
+  request that no preflight protects. Loopback names and bare IP literals still pass, so
+  `HOST=192.168.1.5` keeps working.
+
+### Changed
+
+- The plan editor's "saved" is a confirmation again rather than a permanent fixture: it clears after
+  a couple of seconds, and does so without a re-render that would take the caret out of the next
+  box. A preference that fails to write now says so in that same line instead of replacing the whole
+  page with "the server did not answer" while every figure on screen is still good.
+- Model ids are escaped before being interpolated into markup. They are the one string on the page
+  that comes from a file rather than from this repository.
+- The segmented pickers carry `aria-pressed`, and the two status lines are `aria-live`. Which cut is
+  selected was obvious to look at and invisible otherwise.
+- The parsed-transcript cache is keyed by path rather than by session id, and forgets files that
+  have left the disk. Two project directories are free to contain the same session id, and the
+  server is long-lived.
+- A malformed percent-escape in a URL is a 400 rather than a 500.
+
 ## 0.4.0 — 2026-08-10
 
 The plan stopped being a tier and became a history.
