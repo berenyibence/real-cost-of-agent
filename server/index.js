@@ -61,10 +61,11 @@ Environment
   PORT=4400                       listen on another port (default 4319)
   HOST=127.0.0.1                  bind address; loopback by default
   CLAUDE_HOME=/path/to/.claude    read transcripts from somewhere else
-  XDG_CONFIG_HOME=~/.config       where this app stores your plan
+  XDG_CONFIG_HOME=/path/to/config where this app stores your plan
 
-It reads ~/.claude, writes one preference file, and makes no network
-request of any kind. Nothing leaves this machine.
+Runs on Linux, macOS and Windows. It reads ~/.claude, writes one
+preference file — under %APPDATA% on Windows and ~/.config elsewhere —
+and makes no network request of any kind. Nothing leaves this machine.
 `;
 
 const argv = process.argv.slice(2);
@@ -165,6 +166,21 @@ async function readJson(req) {
 }
 
 /**
+ * Names Windows resolves to a device rather than a file, in any directory.
+ *
+ * `web/con` is not a missing file on Windows — it is the console, and reading it
+ * blocks on keyboard input from the terminal the server was started in, so the
+ * request never finishes and the user's own typing is swallowed. The rule holds
+ * with or without an extension, which is why `con.js` is on the list too.
+ *
+ * Applied on every platform, not just Windows. There is no file here by any of
+ * these names and never will be, so nothing is lost by refusing them — and a
+ * rule that only runs on one platform is a rule whoever changes this code will
+ * not see run.
+ */
+const DEVICE_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
+/**
  * Serve the page.
  *
  * The path is resolved and then checked to still be inside `web/`, rather than
@@ -177,6 +193,14 @@ async function readJson(req) {
  * function: resolve-then-contain is the version that keeps holding if a route
  * is ever fed a path from somewhere other than a parsed URL, and a pattern
  * match for `..` is the version that has to be right about every spelling.
+ *
+ * It is also the half of this that is platform-independent. Windows adds two
+ * spellings the parser does not flatten — `%5C` decodes to a separator there, so
+ * `/%5C..%5C..%5Cpackage.json` escapes a directory the POSIX rules would keep it
+ * inside, and a bare `\` is an absolute root rather than a filename character.
+ * Both land outside `WEB_DIR` and are refused by the same comparison, which is
+ * the argument for resolve-then-contain rather than a pattern match: the pattern
+ * would have had to know about them.
  */
 async function serveStatic(res, pathname) {
   let rel;
@@ -193,7 +217,18 @@ async function serveStatic(res, pathname) {
     res.writeHead(403).end('forbidden');
     return;
   }
+  if (rel.split(/[\\/]+/).some((segment) => DEVICE_NAMES.test(segment))) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found');
+    return;
+  }
   try {
+    // Stat before read, so what gets opened is a file. A directory already
+    // failed the read with EISDIR and 404'd; a device would not have.
+    const stat = await fsp.stat(file);
+    if (!stat.isFile()) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found');
+      return;
+    }
     const body = await fsp.readFile(file);
     res.writeHead(200, {
       'content-type': MIME[path.extname(file)] ?? 'application/octet-stream',
@@ -305,9 +340,12 @@ server.listen(PORT, HOST, () => {
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     // Named the way it was actually started, so the suggestion is copy-pasteable
-    // whether that was npx or a clone.
+    // whether that was npx or a clone — and in the shell it was started from.
+    // `PORT=4400 npm start` is not a command on Windows, so a hint that spells it
+    // that way is a hint that has to be translated before it can be used.
     const how = process.argv[1]?.includes('node_modules') ? 'npx real-cost-of-agent' : 'npm start';
-    console.error(`[real-cost] port ${PORT} is busy. Try: PORT=4400 ${how}`);
+    const setPort = process.platform === 'win32' ? '$env:PORT=4400;' : 'PORT=4400';
+    console.error(`[real-cost] port ${PORT} is busy. Try: ${setPort} ${how}`);
     process.exit(1);
   }
   throw err;

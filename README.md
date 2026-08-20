@@ -206,6 +206,10 @@ X, LinkedIn and Facebook, or 1080×1350 and 1080×1080 for Instagram and Threads
 
 - **Node 20.11 or newer.** Nothing else — the package declares no dependencies, and CI fails if one
   is ever added.
+- **Linux, macOS or Windows.** All three run the whole test suite on every push, and the suite
+  includes booting the server and asking it for every route. Windows keeps your plan under
+  `%APPDATA%` rather than in a dotfile directory; a plan saved there by an older build is still
+  read, so upgrading does not silently reset it.
 - **Claude Code, run at least once**, so there are transcripts to read. If there are none, the page
   says so and names the directory it looked in.
 
@@ -216,6 +220,9 @@ X, LinkedIn and Facebook, or 1080×1350 and 1080×1080 for Instagram and Threads
 | `~/.claude/projects/**/*.jsonl`             | read       | token usage per request, per model              |
 | `~/.claude/telemetry/*.json`                | read       | whether you authenticate by OAuth or an API key |
 | `~/.config/real-cost-of-agent/config.json`  | read/write | your plan, its price, and seat count            |
+
+On Windows those are `%USERPROFILE%\.claude\...` and
+`%APPDATA%\real-cost-of-agent\config.json`. One file is written, wherever you are: the rest is read.
 
 **Nothing leaves your machine.** The server binds to loopback and makes no outbound request of any
 kind — the only HTTP traffic is your browser talking to `127.0.0.1`. If the page is showing a number,
@@ -248,7 +255,14 @@ npx real-cost-of-agent --version
 PORT=4400 npx real-cost-of-agent        # default 4319
 HOST=127.0.0.1 npx real-cost-of-agent   # loopback; change at your own risk
 CLAUDE_HOME=/path/to/.claude npm start  # read someone else's export, or a backup
-XDG_CONFIG_HOME=~/.config npm start     # where this app stores your plan
+XDG_CONFIG_HOME=/path/to/config npm start   # where this app stores your plan
+```
+
+`VAR=value command` is shell syntax rather than anything this program does, and PowerShell spells it
+differently:
+
+```powershell
+$env:PORT=4400; npx real-cost-of-agent
 ```
 
 Ports 4317 and 4318 are OpenTelemetry's collector defaults and are often already taken on a machine
@@ -316,6 +330,11 @@ that matters most is asserted directly: **every breakdown adds up to the same to
 quietly uses different arithmetic from the number above it is the worst way for a money view to be
 wrong, because nothing on screen suggests you should check.
 
+It also boots the server and asks it for every route, so a run of `npm test` on your own machine is a
+run on your own operating system: the path handling, the traversal refusals and the access rules are
+where Linux, macOS and Windows disagree, and checking them anywhere but where they run is checking
+somebody else's platform. CI runs the suite on all three.
+
 ## Layout
 
 ```
@@ -328,7 +347,7 @@ server/
   spend.js    the breakdown — the same dollars, split five ways, each summing to the total
   billing.js  subscription vs API: plans, auth detection, the comparison
   day.js      local calendar days, so an evening session is filed today
-  paths.js    where this app keeps its one preference file
+  paths.js    where this app keeps its one preference file, per platform
 web/
   index.html  the page
   theme.js    light or dark, applied before the first paint
@@ -336,6 +355,8 @@ web/
   share.js    the share card: the aggregate allowlist, the words, the canvas
   styles.css  design tokens and components, light and dark
   brand/      the mark, the lockup, and the repository's social preview
+scripts/
+  package-check.mjs   packs the tarball, installs it elsewhere, serves the page from there
 ```
 
 ## Contributing

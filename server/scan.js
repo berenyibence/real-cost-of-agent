@@ -288,9 +288,36 @@ async function parseTranscript(file) {
  * lossy: `-home-dev-my-app` could be `/home/dev/my-app` or `/home/dev/my/app`,
  * and nothing in the name says which. Used only when a transcript carries no
  * `cwd` of its own.
+ *
+ * A Windows working directory loses its drive colon to the same substitution,
+ * so `C:\\Users\\dev\\checkout` arrives as `C--Users-dev-checkout`. Read by the
+ * POSIX rule that came out `C//Users/dev/checkout` — a path that exists on no
+ * machine, printed in the by-project cut as if it were where the work happened.
+ * The leading `<letter>--` is what says which encoding this is, so the *name*
+ * decides rather than the platform doing the reading: a `~/.claude` copied off a
+ * Windows box, or read from WSL, decodes the same either way.
  */
 function decodeProjectDir(dirName) {
-  return dirName.replace(/^-/, '/').replace(/-/g, '/');
+  const name = String(dirName);
+  const drive = /^([A-Za-z])--(.*)$/.exec(name);
+  if (drive) return `${drive[1]}:\\${drive[2].replace(/-/g, '\\')}`;
+  return name.replace(/^-/, '/').replace(/-/g, '/');
+}
+
+/**
+ * The last segment of a path, whichever family of OS wrote it.
+ *
+ * `path.basename` only knows the separators of the platform it is running on,
+ * so on Linux it hands back the whole of `C:\\Users\\dev\\checkout` — a backslash
+ * being an ordinary filename character there — and the project column then
+ * carries somebody's full home path instead of a project name. Transcripts
+ * cross that line more often than it sounds: a `~/.claude` copied between
+ * machines, a WSL shell reading the Windows one, and `decodeProjectDir` above
+ * producing a Windows path on whatever host is doing the decoding.
+ */
+function baseName(p) {
+  const segments = String(p).split(/[\\/]+/).filter(Boolean);
+  return segments.length ? segments[segments.length - 1] : String(p);
 }
 
 function titleFor(summary, sessionId) {
@@ -537,7 +564,7 @@ export async function scan() {
     } else {
       byWorkspace.set(s.workspaceId, {
         id: s.workspaceId,
-        name: path.basename(s.cwd || s.workspaceId),
+        name: baseName(s.cwd || s.workspaceId),
         path: s.cwd || decodeProjectDir(s.workspaceId),
         sessionCount: 1,
         lastActivity: s.endedAt,

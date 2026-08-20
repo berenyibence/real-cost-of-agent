@@ -2,6 +2,80 @@
 
 Notable changes, newest first. Dates are the day the change landed on `main`.
 
+## 0.7.0 — 2026-08-20
+
+Windows and macOS are supported platforms rather than platforms nobody had checked. Three things
+here were quietly POSIX, and each of them was wrong on Windows in the way that is hardest to notice:
+it printed a plausible answer instead of an error.
+
+### Fixed
+
+- **A Windows project directory decoded to a path that exists on no machine.** Claude Code names a
+  project directory after the working directory it ran in, with the separators replaced by dashes —
+  and on Windows the drive's colon goes the same way, so `C:\Users\dev\checkout` is written as
+  `C--Users-dev-checkout`. Read by the POSIX rule, that came back as `C//Users/dev/checkout` and was
+  shown in the by-project cut as if it were where the work happened.
+
+  The decoder now reads the leading `<letter>--` and produces a Windows path. The **name** decides,
+  not the platform doing the reading, so a `~/.claude` copied off a Windows machine — or read from
+  WSL, which is the ordinary case for anyone running both — decodes the same either way.
+
+- **A project's name was its whole path, read across platforms.** `path.basename` knows only the
+  separators of the host it is running on: on Linux a backslash is an ordinary filename character,
+  so `C:\Users\dev\checkout` has no last segment to take and comes back whole. The project column
+  then carried somebody's home directory instead of a project name. Split on both separators now.
+
+- **The preference file went to `~/.config` on Windows.** That is not where a Windows application's
+  per-user settings belong, and it is not a directory OneDrive's profile sync follows — so the one
+  file this app writes was the one file that would not travel with the profile it belonged to. It
+  now goes to `%APPDATA%\real-cost-of-agent\config.json`.
+
+  A plan saved by an older build in the old place is still **read**, and still never written, which
+  is the same rule the rename to this project's name already followed. A reset here would be the
+  quietest kind of harmless bug: the default plan is a *plausible* plan rather than a blank, so the
+  page would keep showing a confident comparison against a subscription the user is not on, with
+  nothing on screen to suggest checking.
+
+- **`web/con` was the console, not a missing file.** Windows resolves a handful of device names in
+  any directory, so a request for `/con` opened the terminal the server was started in and blocked
+  on keyboard input — the request never finished and the user's own typing went to it. `/nul` was
+  worse in the other direction: an empty 200, an asset that does not exist, served. Both are 404s
+  now, on every platform, and what gets read is checked to be a regular file first.
+
+- **The port-busy hint was not a command on Windows.** `PORT=4400 npm start` is shell syntax, not
+  something this program does, and PowerShell does not have it. The hint now names the spelling for
+  the platform it is printing on.
+
+### Added
+
+- **The smoke test is a test.** It used to be a shell block in the CI workflow, which meant the
+  assertions most likely to differ by platform — path containment, how a URL decodes into a
+  filename, whether the access rules are wired into the request path at all — were the ones only
+  ever checked on Linux. [`test/smoke.test.js`](test/smoke.test.js) boots `server/index.js`, asks it
+  for every route, and reads the headers back. It runs in `npm test`, so it runs on every OS in the
+  matrix and on a contributor's own machine.
+
+- **CI runs on Linux, macOS and Windows.** Windows across all three supported Node versions, macOS
+  on one — it shares every path decision with Linux, so what is being checked there is the platform
+  rather than the matrix. The tarball check runs on Windows too, where `npm` and the `bin` shim are
+  both `.cmd` files that do not exist on Linux, and `npx real-cost-of-agent` goes through both.
+
+- **[`test/platform.test.js`](test/platform.test.js)**, which asks every platform's question from
+  whichever platform is running it. `resolveConfigDirs` takes the platform, the environment and the
+  home directory as arguments for exactly that reason: a test that could only run on Windows would
+  not have caught any of the above, because none of it was written on Windows.
+
+- **`.gitattributes`.** `.editorconfig` asks editors for LF endings; this is the half that holds for
+  git. Without it a Windows clone with `core.autocrlf=true` gets CRLF everywhere, which is mostly
+  invisible and twice not: `server/index.js` is the published binary and its shebang stops being one
+  the moment a carriage return lands on the end of it.
+
+### Changed
+
+- The shell block that was CI's `smoke` job is gone, replaced by the test file above. The tarball
+  check moved from a shell block to [`scripts/package-check.mjs`](scripts/package-check.mjs) for the
+  same reason — it now runs where the shims it is checking actually exist.
+
 ## 0.6.0 — 2026-08-19
 
 The first public release. Everything below landed between the last tagged version and going public.

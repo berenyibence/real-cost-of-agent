@@ -14,10 +14,14 @@ Serves http://127.0.0.1:4319. There is no install step — do not add one, and d
 deliberate property of this project rather than an oversight.
 
 ```bash
-npm test          # node --test, the whole suite, ~100ms
+npm test          # node --test, the whole suite, ~1s — it boots the server too
 PORT=4400 npm start
 CLAUDE_HOME=/tmp/fixture-claude npm start   # point it at a fixture instead of the real ~/.claude
 ```
+
+Runs on Linux, macOS and Windows, and the suite is the same suite on each — `test/smoke.test.js`
+starts `server/index.js` and asks it for every route, so `npm test` on your own machine checks your
+own platform. `VAR=value command` above is shell syntax; PowerShell spells it `$env:PORT=4400;`.
 
 To see a change, restart the server (there is no watcher for its own source) and reload the page.
 `npm start` is the same thing as `node server/index.js`.
@@ -33,6 +37,7 @@ To see a change, restart the server (there is no watcher for its own source) and
 | `server/models.js`  | the catalog, and `requestRates` — what one request is billed at, fast mode and geography included |
 | `server/spend.js`   | `spendBreakdown` — one set of dollars split five ways, each summing to the total |
 | `server/billing.js` | plans, config sanitising, OAuth-vs-API detection, the comparison          |
+| `server/paths.js`   | where the one preference file goes on each platform, and everywhere an older build may have left one |
 | `web/app.js`        | the page. `h()` builds DOM; `render()` rebuilds it from `state`           |
 | `web/share.js`      | the share card: the aggregate allowlist, the post text, the canvas        |
 | `web/theme.js`      | the theme, set before first paint. A file, not an inline block, so the CSP needs no hash |
@@ -117,38 +122,61 @@ transcripts should mean writing one new scanner, not touching the pricing.
    goes to 5m — the cheaper one, so an unknown cannot inflate a bill.
 9. **Days are local days** (`server/day.js`). `toISOString().slice(0, 10)` files an evening session
    under tomorrow east of Greenwich.
-10. **No network calls, ever**, and the browser is told so. Nothing in this repo opens a socket
+10. **The operating system is never assumed, and never asserted from the one it was written on.**
+   Three things here differ by platform, and each of them failed by printing a plausible answer
+   rather than an error. Claude Code encodes a Windows cwd as `C--Users-dev-checkout`, which the
+   POSIX decoder read back as `C//Users/dev/checkout` — a path on no machine, under a column headed
+   "project". `path.basename` knows only the separators of the host it runs on, so a Windows path
+   read anywhere else came back whole and put somebody's home directory in that same column. And the
+   preference file went to `~/.config` on Windows, which is neither where a Windows application's
+   settings belong nor what OneDrive's profile sync follows.
+
+   Three rules follow. The **data** says where it came from wherever it can: `decodeProjectDir` reads
+   the leading `<letter>--`, so a `~/.claude` copied between machines — or read from WSL — decodes
+   the same either way, and `baseName` splits on both separators. Anything that genuinely needs
+   `process.platform` **takes it as an argument**, so the Windows answer is checkable from Linux;
+   `resolveConfigDirs` in `server/paths.js` is the one that does. And anything irreducibly the
+   platform's — how a URL decodes into a filename, what `web/con` opens — is checked by **booting the
+   server**. `test/platform.test.js` holds the first two, `test/smoke.test.js` the third, and CI runs
+   the whole suite on Linux, macOS and Windows. A test that can only run on Windows would not have
+   caught any of this, because none of it was written on Windows.
+
+11. **No network calls, ever**, and the browser is told so. Nothing in this repo opens a socket
    outbound, the README promises that, and `server/index.js` now serves the page under
    `default-src 'self'; connect-src 'self'` so a CDN script, a remote font or an analytics beacon is
    refused rather than merely absent by convention. That is why the theme lives in `web/theme.js`
    rather than an inline `<script>`: an inline block would need a hash in the policy, and a hash is
    the thing that silently stops matching the first time somebody edits the script in a project with
-   no build step to regenerate it. CI asserts the header and the absence of an inline block. It is not a detail to trade away for a feature. The share panel's platform links are the one
+   no build step to regenerate it. `test/smoke.test.js` asserts the header and the absence of an
+   inline block, on every OS in the matrix. It is not a detail to trade away for a feature. The share panel's platform links are the one
    thing pointing off-machine, and they are `href`s a person clicks — no `fetch`, no beacon, no remote
    font, no CDN script, no analytics, and no platform logos fetched from anywhere.
-11. **Only one file is ever written**: `~/.config/real-cost-of-agent/config.json`. `~/.claude` is
-   read-only here — it belongs to Claude Code. The pre-rename `~/.config/agent-spend/config.json` is
-   still _read_ as a fallback, and must never be written.
-12. **No dollar figure is reported that did not come off this machine.** Nothing in `~/.claude`
+12. **Only one file is ever written**: `config.json`, in the one directory `server/paths.js` names
+   for the platform — `%APPDATA%\real-cost-of-agent` on Windows, `~/.config/real-cost-of-agent`
+   everywhere else. `~/.claude` is read-only here — it belongs to Claude Code. Every older location
+   is still _read_, and none of them may ever be written: the pre-rename `agent-spend` directory,
+   and on Windows the `~/.config` spellings an earlier build used. Nothing is migrated, so the old
+   file stays where it is until the plan is next edited and the new one appears beside it.
+13. **No dollar figure is reported that did not come off this machine.** Nothing in `~/.claude`
    records a charge — transcripts carry token counts and a `service_tier`, and no field anywhere
    names a dollar, a credit or an invoice. There are exactly two money figures in this app: recorded
    tokens at published rates, and the plan price the user typed. `compareBilling` used to also return
    `apiCreditsSpent: 0`, inferred from the OAuth beta appearing in telemetry, and the page printed it
    under a green tick — a measurement's worth of confidence behind a guess. Auth detection says which
    of the two figures is the hypothetical one; it never says what anybody was billed.
-13. **The verdict is allowed to be unflattering.** When a plan costs more than the usage was worth,
+14. **The verdict is allowed to be unflattering.** When a plan costs more than the usage was worth,
     `compareBilling` returns `api-ahead`, the page says so and points at metered billing, and every
     share angle inverts with it. Same voice, same size, same prominence as the good news. A tool that
     can only ever conclude "your subscription is excellent" is an advertisement, and the verdicts
     that go the other way are what make the rest of them worth believing.
-14. **Not every charge is a token.** Server-side web search is $10 per 1,000 searches and arrives as
+15. **Not every charge is a token.** Server-side web search is $10 per 1,000 searches and arrives as
     a count in `server_tool_use`, so a total assembled from token counts omits it and says nothing.
     It is a component like any other, in `searches` rather than `tokens` — components carry `count`
     and `unit` for this reason — and it is inside the total that invariant 1 makes every breakdown
     sum to. The token columns still total tokens: folding a per-search charge into "output" would
     balance the books and misstate what was bought. Web fetch is recorded in the same block and is
     published at no charge; it is not billed here.
-15. **No screenshot in `docs/` may show a session title, a project name or a path.** The app is a
+16. **No screenshot in `docs/` may show a session title, a project name or a path.** The app is a
    view of one person's private work: the by-session and by-project cuts render titles taken from
    whatever they typed first and directories from their own disk. That is exactly why `docs/` has
    never held a shot of either, and why the README illustrates those two cuts in prose instead.
@@ -158,7 +186,7 @@ transcripts should mean writing one new scanner, not touching the pricing.
    answer is "the user's machine", it does not go in. The absence of a by-project shot is a decision,
    not a gap waiting to be filled.
 
-16. **Nothing identifying leaves the share panel.** `shareFacts` in `web/share.js` is an allowlist of
+17. **Nothing identifying leaves the share panel.** `shareFacts` in `web/share.js` is an allowlist of
    aggregates, deliberately an allowlist rather than a redaction pass — a new field on `/api/spend`
    should have to be invited into a post rather than arrive in one by default. Project names, paths
    and session titles are not in the shape it returns. `test/share.test.js` asserts this against a
@@ -196,6 +224,14 @@ the list alone, and is what filtering, sorting and revealing all call. Note that
 the native DOM call rather than `h()`, so it will not skip a falsy child — it stringifies it, which
 printed the word "false" in the footer once. Filter the array before spreading it.
 
+**Anything that touches a path.** Ask which machine wrote the string before deciding how to read it.
+A transcript's `cwd` and a project directory name can both have come from Windows on a run that is
+reading them on Linux, so `path.basename` and a `/` split are the wrong tools — `baseName` and
+`decodeProjectDir` in `server/scan.js` are the right ones. Where the *host* really is the question,
+take `process.platform` as an argument the way `resolveConfigDirs` does, and put the case in
+`test/platform.test.js` so it is checkable from wherever you happen to be sitting. See the invariant
+about never asserting the operating system from the one it was written on.
+
 **A new share platform.** Add it to `shareTargets` in `web/share.js` with an honest `prefills` flag,
 and a `note` if it cannot take the text (Facebook and Instagram cannot). Add its host to the
 assertion in `test/share.test.js`. Use a text label, never the platform's logo — a remote logo is a
@@ -212,8 +248,10 @@ point of the project.
 - **`files` in `package.json` is an allowlist, and it is the publish surface.** Anything new under
   `web/` or `server/` that it does not cover is missing from the tarball and present in every clone,
   so the failure is invisible to whoever added it and total for anybody arriving by `npx`. The
-  `package` job in CI installs the tarball somewhere else and serves every asset from there; keep it
-  in step when the file layout changes. `docs/`, `test/` and the workflows deliberately stay out.
+  `package` job in CI runs `scripts/package-check.mjs`, which installs the tarball somewhere else and
+  serves every asset from there; keep it in step when the file layout changes. It runs on Windows as
+  well as Linux, because `npm` and the `bin` shim are both `.cmd` files there and neither exists
+  here. `docs/`, `test/`, `scripts/` and the workflows deliberately stay out of the tarball.
 - **Refer to an invariant by its words, not its number.** The list gets inserted into, and a
   reference in another file does not move when it does — twice now a renumber has left `server/` and
   CI pointing at the wrong rule. "The *no network calls, ever* invariant" survives; "invariant 9"
