@@ -58,6 +58,32 @@ function bin(args, cwd) {
   return result;
 }
 
+/**
+ * Stop the server, including on Windows, where `child.kill()` does not.
+ *
+ * The installed binary is a `.cmd` shim, so it is spawned through a shell — and
+ * killing that child kills cmd.exe, leaving the node process it started running
+ * with its handles open inside the consumer directory. The first Windows run of
+ * this script failed on exactly that: every assertion passed, the cleanup then
+ * could not remove the directory (EBUSY), and the runner reported a "Terminate
+ * orphan process (node)" afterwards. `taskkill /T` takes the tree instead.
+ *
+ * The wait has a ceiling because a kill that did not work must not turn into a
+ * job that hangs until the runner times out.
+ */
+async function stop(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  if (WINDOWS) spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+  else child.kill();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), 10_000);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
 async function freePort() {
   const probe = net.createServer();
   await new Promise((resolve, reject) => {
@@ -176,15 +202,21 @@ try {
   }
   console.log('the tarball is the whole app');
 } finally {
-  if (server) {
-    server.kill();
-    await new Promise((resolve) => server.once('exit', resolve));
-  }
+  const stopped = server ? await stop(server) : true;
   // A pack that got as far as writing the tarball but no further would otherwise
   // leave it in the checkout, where it is untracked and easy to commit.
   if (packed) await fsp.rm(packed, { force: true });
-  // `maxRetries` is for Windows, which can hold a handle open for a moment after
-  // the process using it has gone: an unretried delete there fails with EBUSY
-  // and turns a passing check into a red job.
-  await fsp.rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  try {
+    // `maxRetries` is for Windows, which can hold a handle open for a moment
+    // after the process using it has gone.
+    await fsp.rm(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (err) {
+    // Not fatal, and deliberately so: the question this script exists to answer
+    // was answered above, and a temp directory the OS will reclaim is not a
+    // packaging defect. Reporting one would be a red job that means nothing.
+    console.warn(`could not remove ${work}: ${err.code ?? err.message}`);
+  }
+  // A server still running *is* worth failing on, because it is the thing that
+  // makes the cleanup above fail and it means the kill above did not work.
+  assert.ok(stopped, 'the installed binary did not stop when it was told to');
 }
