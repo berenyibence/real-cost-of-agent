@@ -109,13 +109,34 @@ async function projectsDirOf(root) {
   if (root.trusted) return dir;
   const stat = await fsp.lstat(dir);
   if (!stat.isDirectory()) {
-    const err = new Error(`${dir} is not a directory`);
-    // Reported as unreadable rather than absent: something is there, and it is
-    // not something this is willing to follow.
-    err.code = 'ENOTDIR';
+    const err = new Error(`${dir} is not a directory this will follow`);
+    // Flagged rather than coded. `refused` is thrown from here, so it means the
+    // same thing on every platform — see `refusal` for why that matters.
+    err.refused = true;
     throw err;
   }
   return dir;
+}
+
+/**
+ * Whether a root failed because something is wrong, or merely because it is empty.
+ *
+ * The distinction is worth drawing — a container running as root writing files
+ * this process cannot read is a problem somebody has to fix, and a directory
+ * with no transcripts in it yet is Tuesday — but the first version drew it the
+ * wrong way round: anything that was not `ENOENT` counted as a refusal. That is
+ * an assertion about errno, and errno is the operating system's. `readdir` on a
+ * path that is a file reports `ENOTDIR` on Linux and `ENOENT` on Windows, so the
+ * same fleet entry was a configuration error on one and an empty agent on the
+ * other. Exactly the invariant about never asserting the operating system from
+ * the one it was written on, in the place it is easiest to write by accident.
+ *
+ * So this names the two cases that *are* the same everywhere: a refusal thrown
+ * from this file, and the permission codes libuv normalises. Everything else is
+ * "nothing here", which is the answer that costs nothing to be wrong about.
+ */
+function refusal(err) {
+  return err?.refused === true || err?.code === 'EACCES' || err?.code === 'EPERM';
 }
 
 /**
@@ -644,10 +665,10 @@ export async function scan() {
         id: root.id,
         path: root.dir,
         found: false,
-        // ENOENT is "no agent here yet", which is ordinary. EACCES is a
-        // permission problem the operator has to fix, and it is worth saying so
-        // rather than showing them an agent that appears to have cost nothing.
-        unreadable: err.code !== 'ENOENT',
+        // A permission problem, or a path this refused to follow. Worth saying
+        // out loud rather than showing an agent that appears to have cost
+        // nothing — which is what an unreadable one looks like.
+        unreadable: refusal(err),
         sessions: 0,
       });
       continue;

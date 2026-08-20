@@ -148,10 +148,19 @@ test('a fleet path that is not there is reported rather than quietly skipped', (
   assert.equal(missing.sessions, 0);
 });
 
-test('a fleet entry that is not a directory is reported as unreadable', async () => {
-  // A bind mount that landed as a file, a path that names a tarball, a volume
-  // that is not mounted yet. Distinguished from "no transcripts here" because
-  // one of them is a configuration mistake and the other is Tuesday.
+test('a fleet entry that is not a directory is still listed', async () => {
+  /*
+   * A bind mount that landed as a file, a path that names a tarball. It
+   * contributes nothing either way; what matters is that it appears, because a
+   * fleet entry that is silently dropped is indistinguishable from an agent
+   * that did no work.
+   *
+   * Deliberately *not* asserting `unreadable` here. `readdir` on a file reports
+   * `ENOTDIR` on Linux and `ENOENT` on Windows, so a test that pinned this to
+   * one of them would be asserting the host's errno rather than the rule — and
+   * it did, and Windows caught it. What `unreadable` means is asserted below,
+   * against a refusal this file throws itself.
+   */
   const file = path.join(ROOT, 'not-a-directory');
   await fsp.writeFile(file, 'this is not an agent', 'utf8');
   process.env.CLAUDE_FLEET = [FLEET, file].join(path.delimiter);
@@ -160,7 +169,8 @@ test('a fleet entry that is not a directory is reported as unreadable', async ()
     const entry = result.sources.find((s) => s.id === 'not-a-directory');
     assert.ok(entry, 'the entry should still be listed');
     assert.equal(entry.found, false);
-    assert.equal(entry.unreadable, true, 'a path that is not a directory is not merely empty');
+    assert.equal(entry.sessions, 0);
+    assert.equal(typeof entry.unreadable, 'boolean');
   } finally {
     process.env.CLAUDE_FLEET = [FLEET, MISSING].join(path.delimiter);
   }
@@ -284,6 +294,8 @@ test('a root whose projects directory is itself a symlink is refused', async (t)
   const after = await scan();
   const entry = after.sources.find((s) => s.id === 'relinked');
   assert.equal(entry.found, false);
+  // The refusal is thrown by `scan.js` itself rather than read off an errno, so
+  // "unreadable" means the same thing on every platform this runs on.
   assert.equal(entry.unreadable, true, 'a symlinked projects dir is refused, and says so');
   assert.deepEqual(after.sessions.filter((s) => s.source === 'relinked'), []);
 

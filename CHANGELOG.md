@@ -43,8 +43,14 @@ time you want to know what the run cost, the evidence has been deleted.
 
 - **Agents that could not be read are named**, on startup and on `/api/spend`. A container running as
   root writes root-owned files, and a server that cannot read them otherwise looks exactly like an
-  agent that did no work. A missing path — a typo, a volume not mounted yet — is distinguished from
-  one that exists and is unreadable, because only one of those is a configuration mistake.
+  agent that did no work. A path this refused to follow, or that it has no permission to read, is
+  distinguished from one that is merely empty, because only one of those is a configuration mistake.
+
+  The first version of that distinction drew it off errno — anything that was not `ENOENT` — which is
+  an assertion about the operating system: `readdir` on a path that is a file reports `ENOTDIR` on
+  Linux and `ENOENT` on Windows, so the same fleet entry was a configuration error on one and an
+  empty agent on the other. Windows CI caught it. It now names the two cases that mean the same
+  thing everywhere: a refusal thrown by `scan.js` itself, and the permission codes libuv normalises.
 
 ### Fixed
 
