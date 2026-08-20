@@ -101,7 +101,12 @@ try {
 
   await fsp.mkdir(consumer, { recursive: true });
   await fsp.mkdir(path.join(claudeHome, 'projects'), { recursive: true });
-  await fsp.rename(packed, tarball);
+  // Copied and deleted rather than renamed. On a Windows runner the checkout is
+  // on `D:` and the temp directory is on `C:`, and a rename cannot cross a
+  // volume — it fails with EXDEV, which on Linux never happens because both
+  // paths are on the same filesystem.
+  await fsp.copyFile(packed, tarball);
+  await fsp.rm(packed, { force: true });
   packed = null;
   console.log(`packed ${name}, ${(fs.statSync(tarball).size / 1024).toFixed(0)}kB`);
 
