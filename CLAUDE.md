@@ -32,10 +32,10 @@ To see a change, restart the server (there is no watcher for its own source) and
 | ------------------- | ------------------------------------------------------------------------ |
 | `server/index.js`   | routes and static serving. Every route is listed in one `if` chain        |
 | `server/access.js`  | which hosts and origins the server answers at all — rebinding and CSRF    |
-| `server/scan.js`    | **everything that knows what a Claude Code transcript looks like** — including that a session is several files |
+| `server/scan.js`    | **everything that knows what a Claude Code transcript looks like** — including that a session is several files, and that an agent may be a container |
 | `server/store.js`   | the cached index, and `withEconomics` — pricing applied to a session      |
 | `server/models.js`  | the catalog, and `requestRates` — what one request is billed at, fast mode and geography included |
-| `server/spend.js`   | `spendBreakdown` — one set of dollars split five ways, each summing to the total |
+| `server/spend.js`   | `spendBreakdown` — one set of dollars split six ways, each summing to the total |
 | `server/billing.js` | plans, config sanitising, OAuth-vs-API detection, the comparison          |
 | `server/paths.js`   | where the one preference file goes on each platform, and everywhere an older build may have left one |
 | `web/app.js`        | the page. `h()` builds DOM; `render()` rebuilds it from `state`           |
@@ -141,7 +141,27 @@ transcripts should mean writing one new scanner, not touching the pricing.
    the whole suite on Linux, macOS and Windows. A test that can only run on Windows would not have
    caught any of this, because none of it was written on Windows.
 
-11. **No network calls, ever**, and the browser is told so. Nothing in this repo opens a socket
+11. **A fleet root is written by something that is not this machine, and is read as such.**
+   `CLAUDE_FLEET` points at directories a container writes into — `claude -p` in Docker is handed an
+   auth token and nothing else, its transcripts die with the container, so a host directory it writes
+   into is the only place they can be read from afterwards. That makes those paths untrusted in the
+   way a path off a network request is, and three rules follow. What the operator names in the
+   environment is theirs and is resolved with `stat`, so a fleet entry may be a symlink into a volume;
+   what is **discovered** underneath it is taken from the type `readdir` reports, which is false for a
+   symlink, so a container that plants `projects -> /` cannot make the walk leave its own directory.
+   Nothing in a fleet root is ever written — the *only one file is ever written* rule covers them
+   exactly as it covers `~/.claude`. And a root that is missing or unreadable is **reported**, in
+   `sources` and on startup, because a container running as root writing files this process cannot
+   read looks precisely like an agent that did no work.
+
+   The corollary is what the fleet is *for*. Every headless container works in `/workspace`, so
+   `byProject` collapses the whole fleet into one row named `workspace` — right, since it is one
+   codebase, and useless for the only question a fleet operator has. `bySource` is the cut that
+   answers it, and session grouping is keyed per root: two containers that ran the same session id
+   are two sessions, and a shared map made the second overwrite the first. `test/fleet.test.js` holds
+   all of it, including that scanning writes nothing and that a symlink is refused.
+
+12. **No network calls, ever**, and the browser is told so. Nothing in this repo opens a socket
    outbound, the README promises that, and `server/index.js` now serves the page under
    `default-src 'self'; connect-src 'self'` so a CDN script, a remote font or an analytics beacon is
    refused rather than merely absent by convention. That is why the theme lives in `web/theme.js`
@@ -151,45 +171,52 @@ transcripts should mean writing one new scanner, not touching the pricing.
    inline block, on every OS in the matrix. It is not a detail to trade away for a feature. The share panel's platform links are the one
    thing pointing off-machine, and they are `href`s a person clicks — no `fetch`, no beacon, no remote
    font, no CDN script, no analytics, and no platform logos fetched from anywhere.
-12. **Only one file is ever written**: `config.json`, in the one directory `server/paths.js` names
+13. **Only one file is ever written**: `config.json`, in the one directory `server/paths.js` names
    for the platform — `%APPDATA%\real-cost-of-agent` on Windows, `~/.config/real-cost-of-agent`
-   everywhere else. `~/.claude` is read-only here — it belongs to Claude Code. Every older location
+   everywhere else. `~/.claude` is read-only here — it belongs to Claude Code, and every fleet root
+   is read-only for the same reason: it belongs to a container. Every older location
    is still _read_, and none of them may ever be written: the pre-rename `agent-spend` directory,
    and on Windows the `~/.config` spellings an earlier build used. Nothing is migrated, so the old
    file stays where it is until the plan is next edited and the new one appears beside it.
-13. **No dollar figure is reported that did not come off this machine.** Nothing in `~/.claude`
+14. **No dollar figure is reported that did not come off this machine.** Nothing in `~/.claude`
    records a charge — transcripts carry token counts and a `service_tier`, and no field anywhere
    names a dollar, a credit or an invoice. There are exactly two money figures in this app: recorded
    tokens at published rates, and the plan price the user typed. `compareBilling` used to also return
    `apiCreditsSpent: 0`, inferred from the OAuth beta appearing in telemetry, and the page printed it
    under a green tick — a measurement's worth of confidence behind a guess. Auth detection says which
    of the two figures is the hypothetical one; it never says what anybody was billed.
-14. **The verdict is allowed to be unflattering.** When a plan costs more than the usage was worth,
+15. **The verdict is allowed to be unflattering.** When a plan costs more than the usage was worth,
     `compareBilling` returns `api-ahead`, the page says so and points at metered billing, and every
     share angle inverts with it. Same voice, same size, same prominence as the good news. A tool that
     can only ever conclude "your subscription is excellent" is an advertisement, and the verdicts
     that go the other way are what make the rest of them worth believing.
-15. **Not every charge is a token.** Server-side web search is $10 per 1,000 searches and arrives as
+16. **Not every charge is a token.** Server-side web search is $10 per 1,000 searches and arrives as
     a count in `server_tool_use`, so a total assembled from token counts omits it and says nothing.
     It is a component like any other, in `searches` rather than `tokens` — components carry `count`
     and `unit` for this reason — and it is inside the total that invariant 1 makes every breakdown
     sum to. The token columns still total tokens: folding a per-search charge into "output" would
     balance the books and misstate what was bought. Web fetch is recorded in the same block and is
     published at no charge; it is not billed here.
-16. **No screenshot in `docs/` may show a session title, a project name or a path.** The app is a
-   view of one person's private work: the by-session and by-project cuts render titles taken from
-   whatever they typed first and directories from their own disk. That is exactly why `docs/` has
-   never held a shot of either, and why the README illustrates those two cuts in prose instead.
+17. **No screenshot in `docs/` may show a session title, a project name, a path or an agent name.**
+   The app is a view of one person's private work: the by-session and by-project cuts render titles
+   taken from whatever they typed first and directories from their own disk, and the by-agent cut
+   renders container names, which are usually somebody's customer, branch or internal service. That
+   is exactly why `docs/` has never held a shot of any of them, and why the README illustrates those
+   cuts in prose instead.
    Shootable panels are the ones whose every string is written in this repo or is a model name:
    `where-the-money-went`, `by-model`, `by-day`, `plan-vs-list-rates`, `light-theme`, `share-panel`.
    Before adding an image here, read every string in it and ask which file it came from — if the
-   answer is "the user's machine", it does not go in. The absence of a by-project shot is a decision,
-   not a gap waiting to be filled.
+   answer is "the user's machine", it does not go in. The absence of a by-project or by-agent shot is
+   a decision, not a gap waiting to be filled.
 
-17. **Nothing identifying leaves the share panel.** `shareFacts` in `web/share.js` is an allowlist of
+18. **Nothing identifying leaves the share panel.** `shareFacts` in `web/share.js` is an allowlist of
    aggregates, deliberately an allowlist rather than a redaction pass — a new field on `/api/spend`
-   should have to be invited into a post rather than arrive in one by default. Project names, paths
-   and session titles are not in the shape it returns. `test/share.test.js` asserts this against a
+   should have to be invited into a post rather than arrive in one by default. Project names, paths,
+   session titles and agent names are not in the shape it returns. Agent names are the newest reason
+   the allowlist is the right shape: `bySource` is aggregate data, and a container is usually named
+   after the customer, the branch or the internal service it builds, so "which of my agents cost the
+   most" is a sentence about somebody's infrastructure and sometimes about their client list.
+   Aggregate is not the same as safe to publish. `test/share.test.js` asserts this against a
    payload seeded with paths in every field that has one; extend that test when the shape changes.
 
 ## Common changes
@@ -211,6 +238,12 @@ Each period carries `planId`, `monthlyOverride`, `seats` and `months`, and `mont
 span the transcripts show". Keep that null distinct from a value that failed to parse: it is the
 whole no-override case. One period always survives sanitising, so the editor is never empty, and the
 pre-0.4 flat shape is read as a single period rather than dropped.
+
+**Anything about the fleet.** `CLAUDE_FLEET` is resolved by `listRoots` in `server/scan.js`, which is
+the only place that decides what an agent is — a directory with a `projects/` in it. Everything
+downstream sees one flat list of sessions that each carry a `source`, so a new cut or a new price
+never has to know containers exist. Read the invariant about a fleet root being written by something
+that is not this machine before changing how those directories are walked.
 
 **A new cut of the data.** Add the bucket in `spendBreakdown` (`server/spend.js`), then a `CUTS`
 entry and a renderer in `web/app.js`. The new bucket must sum to `total` — add it to the loop in

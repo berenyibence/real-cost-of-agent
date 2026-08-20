@@ -149,7 +149,7 @@ test('searches are a component, so the breakdown still accounts for them', () =>
   assert.ok(near(sum(componentsOf(s)), s.economics.cost));
 
   const b = spendBreakdown([s], []);
-  for (const key of ['components', 'byModel', 'byProject', 'byDay', 'bySession']) {
+  for (const key of ['components', 'byModel', 'byProject', 'bySource', 'byDay', 'bySession']) {
     assert.ok(near(sum(b[key]), b.total, 1e-6), `${key} sums to ${sum(b[key])}`);
   }
 });
@@ -164,8 +164,12 @@ test('a session with no model spec contributes no components', () => {
 
 test('every breakdown adds up to the same total', () => {
   const sessions = [
-    session({ id: 'a', workspaceId: 'w1' }),
-    session({ id: 'b', workspaceId: 'w2', model: HAIKU }),
+    // Two agents and one session that names none, because a payload written
+    // before sources existed still has to land somewhere: an undefined source
+    // that fell out of `bySource` would leave that cut short of the total while
+    // every other cut still agreed with it.
+    session({ id: 'a', workspaceId: 'w1', source: 'agent-1' }),
+    session({ id: 'b', workspaceId: 'w2', model: HAIKU, source: 'agent-2' }),
     session({
       id: 'c',
       workspaceId: 'w1',
@@ -181,7 +185,7 @@ test('every breakdown adds up to the same total', () => {
   ];
   const b = spendBreakdown(sessions, workspaces);
 
-  for (const key of ['components', 'byModel', 'byProject', 'byDay', 'bySession']) {
+  for (const key of ['components', 'byModel', 'byProject', 'bySource', 'byDay', 'bySession']) {
     assert.ok(
       near(sum(b[key]), b.total, 1e-6),
       `${key} sums to ${sum(b[key])}, total is ${b.total}`,
@@ -270,7 +274,7 @@ test('every bucket carries the token split, not just a dollar figure', () => {
 
   // A model row that shows only dollars cannot say why that model is the
   // expensive one, which is the only question the row provokes.
-  for (const key of ['byModel', 'byProject', 'byDay']) {
+  for (const key of ['byModel', 'byProject', 'bySource', 'byDay']) {
     for (const row of b[key]) {
       for (const field of ['input', 'output', 'cacheRead', 'cacheWrite', 'searches']) {
         assert.equal(typeof row[field], 'number', `${key} row is missing ${field}`);

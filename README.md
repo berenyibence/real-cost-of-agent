@@ -118,6 +118,7 @@ dollars a different way, so a figure can be opened until it stops being a myster
 | What was billed | Output, fresh input, cache reads, 5m / 1h cache writes — and web searches, which are billed per search rather than per token |
 | By model       | Which models the money went to — and, from the token split on each row, why that one |
 | By project     | Which codebases cost the most                                                    |
+| By agent       | Which machine or container ran it — appears only when there is more than one. See [Agents in containers](#agents-in-containers) |
 | By day         | When the spend happened                                                          |
 | By session     | Every run, with the token counts behind each figure                              |
 
@@ -224,6 +225,10 @@ X, LinkedIn and Facebook, or 1080×1350 and 1080×1080 for Instagram and Threads
 On Windows those are `%USERPROFILE%\.claude\...` and
 `%APPDATA%\real-cost-of-agent\config.json`. One file is written, wherever you are: the rest is read.
 
+With `CLAUDE_FLEET` set, `<fleet>/*/projects/**/*.jsonl` is read as well — see
+[Agents in containers](#agents-in-containers). Read, never written, like everything else on this
+list.
+
 **Nothing leaves your machine.** The server binds to loopback and makes no outbound request of any
 kind — the only HTTP traffic is your browser talking to `127.0.0.1`. If the page is showing a number,
 it came off your own disk. The share links are the single exception, and they are exactly that:
@@ -255,6 +260,7 @@ npx real-cost-of-agent --version
 PORT=4400 npx real-cost-of-agent        # default 4319
 HOST=127.0.0.1 npx real-cost-of-agent   # loopback; change at your own risk
 CLAUDE_HOME=/path/to/.claude npm start  # read someone else's export, or a backup
+CLAUDE_FLEET=/srv/agents npm start      # every agent under there, too — see below
 XDG_CONFIG_HOME=/path/to/config npm start   # where this app stores your plan
 ```
 
@@ -267,6 +273,92 @@ $env:PORT=4400; npx real-cost-of-agent
 
 Ports 4317 and 4318 are OpenTelemetry's collector defaults and are often already taken on a machine
 that runs agents, which is why the default here is 4319.
+
+## Agents in containers
+
+`claude -p` in a Docker container is handed an auth token and nothing else. It writes its transcripts
+inside the container, and when the container exits they go with it — so by the time you want to know
+what the run cost, the evidence has been deleted.
+
+The fix is a directory on the host that the container writes into, and one environment variable here:
+
+```bash
+# each container writes its transcripts to a directory of its own
+docker run --rm \
+  -e ANTHROPIC_API_KEY \
+  -v /srv/agents/build-01/projects:/root/.claude/projects \
+  your-image claude -p "run the release checks"
+
+# and this prices all of them
+CLAUDE_FLEET=/srv/agents npx real-cost-of-agent
+```
+
+`CLAUDE_FLEET` is a directory of agents, or one agent, or several of either separated by your
+platform's path delimiter (`:`, and `;` on Windows). What makes a directory an agent is a `projects/`
+inside it, so both shapes work without a second variable to say which you meant. A container that did
+not exist when the server started shows up on the next scan.
+
+The page grows a **By agent** cut, which is the one the by-project cut cannot be: every container
+works in `/workspace`, so forty of them collapse into a single project row named `workspace` —
+correct, since it is one codebase, and useless for asking which agent is spending the money.
+
+### The rules that make it safe
+
+- **Mount `projects/`, not the whole `~/.claude`.** The auth token you passed in lands in
+  `~/.claude/.credentials.json`. Mounting the parent copies every container's token onto the host,
+  into a directory whose entire purpose is to be read by another program. Mounting the subdirectory
+  leaves the token in the container, which is where you put it. This app never reads that file — but
+  the safe design is for it not to be there.
+- **One directory per container, never a shared one.** A shared mount means every container can read
+  every other container's transcripts, which are its prompts and its source code. Separate
+  directories keep that isolation, and are also what makes per-agent attribution possible at all.
+- **Nothing is pushed, and there is nothing listening.** This server has no authentication, because
+  it binds to loopback and reads files. An ingest endpoint would need one, and an unauthenticated
+  local endpoint that feeds a money figure is the failure this project exists to avoid. Data arrives
+  by filesystem, in one direction, and the server still makes no outbound request of any kind.
+- **The host directory is read, never written.** The *only one file is ever written* rule covers a
+  fleet root exactly as it covers `~/.claude`. Mount it read-only on the reading side if you like.
+- **A symlink inside a fleet root is not followed** — including `projects` itself, which is the one
+  that matters if you mount `<root>` rather than `<root>/projects`. Those directories are written by
+  containers, so a path in one is untrusted in the way a path from a network request is:
+  `projects -> /` would otherwise walk the host and `secret.jsonl -> /somewhere/private` would
+  otherwise be read and priced. What you name in `CLAUDE_FLEET` is yours and may be a symlink; what is
+  discovered underneath it is not, and may not. Your own `~/.claude` is unaffected — relocating it
+  with a symlink still works.
+- **An agent that cannot be read says so.** A container running as root writes root-owned files, and
+  a server that cannot read them would otherwise look exactly like an agent that did no work. Missing
+  and unreadable roots are named on startup and carried on `/api/spend`. Run the container as
+  yourself — `--user "$(id -u):$(id -g)"` — or read the fleet as someone who can.
+
+### Retrofitting a container that is already running
+
+If the transcripts are already inside a container, copy them out. There is nothing to install in the
+container and no agent to run in it:
+
+```bash
+docker cp build-01:/root/.claude/projects /srv/agents/build-01/projects
+```
+
+`/root` there is the container's `$HOME`; adjust it if the image runs as another user.
+
+### Compose
+
+```yaml
+services:
+  agent:
+    image: your-image
+    environment: [ANTHROPIC_API_KEY]
+    command: claude -p "run the release checks"
+    volumes:
+      - ./agents/${AGENT_NAME}/projects:/root/.claude/projects
+```
+
+### What it will not tell you
+
+Whether the fleet authenticates by subscription or by API key. That is detected from telemetry on the
+machine running this, and a host that only runs containers has none of its own — the page says
+`unknown` rather than guessing, and the plan comparison is yours to set. It is the same rule as
+everywhere else here: a figure that had to guess says so where it is shown.
 
 ## How the money is worked out
 
@@ -341,10 +433,10 @@ somebody else's platform. CI runs the suite on all three.
 server/
   index.js    HTTP: three read routes, one write route, static files
   access.js   which hosts and origins this server will answer at all
-  scan.js     reads ~/.claude transcripts, subagents included → sessions with token counts
+  scan.js     reads ~/.claude transcripts, subagents and whole fleets included → sessions with token counts
   store.js    the in-memory index, and pricing applied to it
   models.js   the model catalog: rates, context windows, cache multipliers
-  spend.js    the breakdown — the same dollars, split five ways, each summing to the total
+  spend.js    the breakdown — the same dollars, split six ways, each summing to the total
   billing.js  subscription vs API: plans, auth detection, the comparison
   day.js      local calendar days, so an evening session is filed today
   paths.js    where this app keeps its one preference file, per platform

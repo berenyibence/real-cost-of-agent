@@ -206,6 +206,7 @@ export function spendBreakdown(sessions, workspaces = []) {
   );
   const byModel = new Map();
   const byProject = new Map();
+  const bySource = new Map();
   const byDay = new Map();
 
   let total = 0;
@@ -267,6 +268,27 @@ export function spendBreakdown(sessions, workspaces = []) {
         name: wsName.get(session.workspaceId) ?? session.workspaceId,
         path: session.cwd,
       },
+      cost,
+      session.usage,
+    );
+    /**
+     * Which agent ran it — this machine, or one of the containers in the fleet.
+     *
+     * This is the cut the by-project one cannot be. Every headless container
+     * gets the same working directory, so forty of them collapse into a single
+     * project row named `workspace` — correct, since it *is* one codebase, and
+     * useless for the question a fleet operator is actually asking, which is
+     * which agent is spending the money. Splitting by project instead would
+     * give forty rows with the same name and no way to tell them apart.
+     *
+     * Defaulted rather than skipped: a session with no source recorded is still
+     * a session, and dropping it here would leave this cut short of the total
+     * that every other cut sums to.
+     */
+    addInto(
+      bySource,
+      session.source || 'local',
+      { id: session.source || 'local' },
       cost,
       session.usage,
     );
@@ -341,6 +363,12 @@ export function spendBreakdown(sessions, workspaces = []) {
     components: withShare([...components.values()].sort(sortByCost)),
     byModel: withShare([...byModel.values()].sort(sortByCost)),
     byProject: withShare([...byProject.values()].sort(sortByCost)),
+    /**
+     * One row per agent. On a machine with no fleet this is a single row, which
+     * is why the page hides the cut rather than showing a breakdown with one
+     * bar in it — a split of one is not a split.
+     */
+    bySource: withShare([...bySource.values()].sort(sortByCost)),
     byDay: filledDays,
     /**
      * Every priced session, not the loudest twelve.
@@ -370,6 +398,12 @@ export function spendBreakdown(sessions, workspaces = []) {
           id: s.id,
           name: s.title,
           project: wsName.get(s.workspaceId) ?? s.workspaceId,
+          /**
+           * Which agent ran it. On a fleet the project column is the same word
+           * on every row — every container works in `/workspace` — so without
+           * this the browser has several hundred rows it cannot tell apart.
+           */
+          source: s.source || 'local',
           model: s.modelSpec?.name,
           /** More than one billing slice — a mid-run model or `/fast` switch. */
           models: Array.isArray(s.usageByModel) ? s.usageByModel.length : 1,

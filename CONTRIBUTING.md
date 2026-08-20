@@ -97,10 +97,10 @@ The layering is worth preserving.
 | File                | Owns                                                                |
 | ------------------- | ------------------------------------------------------------------- |
 | `server/index.js`   | routes and static serving. Every route is listed in one `if` chain   |
-| `server/scan.js`    | **everything that knows what a Claude Code transcript looks like** — including that a session spans several files, subagents included |
+| `server/scan.js`    | **everything that knows what a Claude Code transcript looks like** — including that a session spans several files, subagents included, and that an agent may be a container |
 | `server/store.js`   | the cached index, and `withEconomics` — pricing applied to a session |
 | `server/models.js`  | the catalog: rates, context windows, cache multipliers, tiers        |
-| `server/spend.js`   | `spendBreakdown` — one set of dollars split five ways                |
+| `server/spend.js`   | `spendBreakdown` — one set of dollars split six ways                |
 | `server/billing.js` | plans, config sanitising, OAuth-vs-API detection, the comparison     |
 | `web/app.js`        | the page. `h()` builds DOM; `render()` rebuilds it from `state`      |
 | `web/share.js`      | the aggregate allowlist, the post text, the canvas card              |

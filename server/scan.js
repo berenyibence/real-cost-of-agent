@@ -39,9 +39,150 @@ import readline from 'node:readline';
 export const CLAUDE_DIR = process.env.CLAUDE_HOME || path.join(os.homedir(), '.claude');
 export const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 
-/** Whether there is anything on this machine to read at all. */
+/** Whether the machine this is running on has transcripts of its own. */
 export function claudeCodeFound() {
   return fs.existsSync(PROJECTS_DIR);
+}
+
+/* ------------------------------------------------------------------ *
+ * More than one agent
+ * ------------------------------------------------------------------ */
+
+/**
+ * `CLAUDE_FLEET`, split.
+ *
+ * A headless agent — `claude -p` in a container, a CI job, a box in a rack —
+ * writes its transcripts where it is, not where this is running. It is handed
+ * an auth token and nothing else, and when it exits its filesystem goes with
+ * it. So the transcripts have to be somewhere this can read *before* that
+ * happens, which in practice means a directory on the host that the container
+ * writes into. See the fleet section of the README for the `docker run` line.
+ *
+ * Each entry is either an agent's `~/.claude` or a directory of them — decided
+ * by whether it has a `projects/` in it, which is the only thing that makes a
+ * directory one of these. That means one variable covers both "here is my one
+ * build agent" and "here is where forty containers write", and a container that
+ * did not exist when the server started still appears on the next scan.
+ *
+ * Separated by `path.delimiter`, which is `;` on Windows precisely because a
+ * drive letter has a colon in it. The delimiter is an argument so that the
+ * Windows answer is checkable from Linux — see the invariant about never
+ * asserting the operating system from the one it was written on.
+ */
+export function fleetDirs(env = process.env, delimiter = path.delimiter) {
+  const raw = env.CLAUDE_FLEET;
+  if (typeof raw !== 'string' || !raw) return [];
+  return raw
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+/** Whether a directory is an agent's `~/.claude` rather than a directory of them. */
+async function holdsProjects(dir) {
+  try {
+    return (await fsp.stat(path.join(dir, 'projects'))).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `<root>/projects`, when this is allowed to read it.
+ *
+ * The subtlety that nearly got through: `projects` is the one path component
+ * that is inside a container-writable directory in *every* layout. Mount
+ * `<root>/projects` and the container writes underneath it, which is fine — but
+ * mount `<root>` instead, which people will, and the container creates
+ * `projects` itself and is free to create it as a symlink. `readdir` follows the
+ * last component, so `projects -> /` would have walked the host. Everything
+ * *below* here was already safe, because the walk takes only what `readdir`
+ * reports as a directory and a symlink is not one.
+ *
+ * The local root keeps following it. That one is the user's own home rather
+ * than a container's output, and relocating `~/.claude/projects` to another disk
+ * with a symlink is a thing a person legitimately does — refusing it would break
+ * a working install to defend against its owner.
+ */
+async function projectsDirOf(root) {
+  const dir = path.join(root.dir, 'projects');
+  if (root.trusted) return dir;
+  const stat = await fsp.lstat(dir);
+  if (!stat.isDirectory()) {
+    const err = new Error(`${dir} is not a directory`);
+    // Reported as unreadable rather than absent: something is there, and it is
+    // not something this is willing to follow.
+    err.code = 'ENOTDIR';
+    throw err;
+  }
+  return dir;
+}
+
+/**
+ * Ids are what the page calls each agent, so they have to be unique.
+ *
+ * Two fleet directories are free to both contain an `agent-1`, and somebody is
+ * eventually going to name a container `local`. Suffixed rather than rejected:
+ * a name collision is not a reason to drop an agent's money on the floor, and
+ * the listing is sorted, so which one gets the suffix does not change between
+ * scans.
+ */
+function withUniqueIds(roots) {
+  const seen = new Map();
+  return roots.map((root) => {
+    const base = root.id || 'agent';
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    return n === 1 ? root : { ...root, id: `${base}-${n}` };
+  });
+}
+
+/**
+ * Every agent this run is pricing: this machine first, then the fleet.
+ *
+ * **The trust boundary is here.** What the operator names in `CLAUDE_FLEET` is
+ * theirs and is resolved with `stat`, so an entry may be a symlink into a volume
+ * mount. What is *discovered* underneath it is not theirs — a container writes
+ * into these directories — so a fleet entry's children are taken from the
+ * directory type `readdir` reports, which is false for a symlink. The two paths
+ * below that are also container-controlled are guarded where they are used
+ * rather than here: `projects` by `projectsDirOf`, and everything under it by
+ * the same dirent rule, the whole way down through `transcriptsUnder`.
+ *
+ * The local root is always included, even when a fleet is configured. A machine
+ * running agents is usually also a machine somebody works on, and the question
+ * "what did all of this cost" does not stop at the container boundary. Point
+ * `CLAUDE_HOME` at an empty directory for fleet-only.
+ */
+export async function listRoots(env = process.env) {
+  const roots = [
+    // Trusted: this is the home directory of whoever started the server, not a
+    // directory something else writes into. See `projectsDirOf`.
+    { id: 'local', dir: env.CLAUDE_HOME || path.join(os.homedir(), '.claude'), trusted: true },
+  ];
+
+  for (const entry of fleetDirs(env)) {
+    if (await holdsProjects(entry)) {
+      roots.push({ id: baseName(entry), dir: entry });
+      continue;
+    }
+    let children;
+    try {
+      children = await fsp.readdir(entry, { withFileTypes: true });
+    } catch {
+      // A typo in `CLAUDE_FLEET`, or a mount that is not there yet. Kept as a
+      // root so it is reported as found-nothing rather than silently dropped —
+      // "my fleet shows no sessions" and "my fleet path is wrong" look identical
+      // from the page unless it says which.
+      roots.push({ id: baseName(entry), dir: entry });
+      continue;
+    }
+    for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (child.isDirectory()) roots.push({ id: child.name, dir: path.join(entry, child.name) });
+    }
+  }
+
+  return withUniqueIds(roots);
 }
 
 const EMPTY_USAGE = () => ({
@@ -468,17 +609,78 @@ async function mapLimit(items, limit, fn) {
   return out.filter(Boolean);
 }
 
-/** Every session on this machine, with the usage that will be priced. */
+/**
+ * Every session this machine can see, with the usage that will be priced.
+ *
+ * One pass per agent — this machine, then each fleet root — and the results are
+ * one flat list, because a session's cost does not depend on which agent ran it.
+ * What each session carries is a `source`, so the page can split by agent
+ * without any other cut having to know agents exist.
+ *
+ * `sources` comes back alongside, one entry per root, saying whether it was
+ * readable and how many sessions came out of it. A root that is missing, or
+ * that this process has no permission to read — which is the ordinary case for
+ * a container that ran as root and a server that does not — has to be visible.
+ * Silently contributing nothing looks exactly like an agent that did no work,
+ * and the whole point of this app is not to report a number that quietly left
+ * something out.
+ */
 export async function scan() {
-  if (!claudeCodeFound()) return { workspaces: [], sessions: [] };
-
-  const projectDirs = (await fsp.readdir(PROJECTS_DIR, { withFileTypes: true }))
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name);
-
+  const roots = await listRoots();
   const jobs = [];
+  const sources = [];
+
+  for (const root of roots) {
+    const before = jobs.length;
+    let projectsDir;
+    let projectDirs;
+    try {
+      projectsDir = await projectsDirOf(root);
+      projectDirs = (await fsp.readdir(projectsDir, { withFileTypes: true }))
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch (err) {
+      sources.push({
+        id: root.id,
+        path: root.dir,
+        found: false,
+        // ENOENT is "no agent here yet", which is ordinary. EACCES is a
+        // permission problem the operator has to fix, and it is worth saying so
+        // rather than showing them an agent that appears to have cost nothing.
+        unreadable: err.code !== 'ENOENT',
+        sessions: 0,
+      });
+      continue;
+    }
+
+    await collectProjects(projectsDir, projectDirs, root.id, jobs);
+    sources.push({
+      id: root.id,
+      path: root.dir,
+      found: true,
+      unreadable: false,
+      sessions: jobs.length - before,
+    });
+  }
+
+  return finishScan(jobs, sources);
+}
+
+/**
+ * One root's project directories, appended to `jobs`.
+ *
+ * Split out of `scan` when a second root became possible, and the split is what
+ * fixes the bug that came with it: the session-id map below is per project
+ * directory **per root**. Every container gets `/workspace` as its working
+ * directory, so every one of them writes to a project directory of the same
+ * name — and a session id that repeated across two of them (a pinned
+ * `--session-id`, or an image with a transcript baked into it) would have had
+ * the second overwrite the first in a shared map. One session's money, gone,
+ * with every cut still summing to the total it never reached.
+ */
+async function collectProjects(projectsDir, projectDirs, source, jobs) {
   for (const dirName of projectDirs) {
-    const dir = path.join(PROJECTS_DIR, dirName);
+    const dir = path.join(projectsDir, dirName);
     let entries;
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -517,10 +719,13 @@ export async function scan() {
       // The session's own transcript leads, so it is the one `mergeSummaries`
       // takes the title, the cwd and the headline model from.
       const files = main ? [main, ...nested] : nested;
-      if (files.length) jobs.push({ dirName, sessionId, files });
+      if (files.length) jobs.push({ source, dirName, sessionId, files });
     }
   }
+}
 
+/** Parse everything that was gathered, and shape it the way the store wants. */
+async function finishScan(jobs, sources) {
   // Forget transcripts that are no longer on disk. The process is long-lived
   // and the watcher rescans on every write, so without this a deleted session
   // holds its parsed summary for as long as the server runs.
@@ -538,6 +743,8 @@ export async function scan() {
     const summary = mergeSummaries(summaries);
     return {
       id: job.sessionId,
+      /** Which agent's disk this came off. `local` is the machine running this. */
+      source: job.source,
       workspaceId: job.dirName,
       title: titleFor(summary, job.sessionId),
       cwd: summary.cwd || decodeProjectDir(job.dirName),
@@ -575,33 +782,70 @@ export async function scan() {
   return {
     workspaces: [...byWorkspace.values()].sort((a, b) => b.lastActivity - a.lastActivity),
     sessions,
+    sources,
   };
 }
 
 /**
- * Re-run the scan when transcripts change.
+ * Re-run the scan when transcripts change, anywhere in the fleet.
  *
  * Best-effort: `fs.watch` with `recursive` is not supported everywhere, and the
  * page works fine without it — the button in the header does the same thing on
  * demand. Returns an unsubscribe function.
+ *
+ * The fleet directories are watched **as well as** the roots inside them, and
+ * not recursively. A container that starts after this does creates a directory
+ * that no watch on an existing root can see, and a fleet that only ever
+ * notices agents that were already there is a fleet that goes stale silently.
+ * Non-recursive because the roots underneath are already covered, and one
+ * inotify watch per directory of a large fleet is a cost worth not paying
+ * twice.
+ *
+ * Roots are discovered asynchronously, so watchers attach after this returns.
+ * `closed` is what makes unsubscribing before that safe — otherwise a server
+ * shut down during its first scan leaks every watcher the scan then opens.
  */
 export function watch(onChange) {
-  if (!claudeCodeFound()) return () => {};
   let timer = null;
+  let closed = false;
+  const watchers = [];
+
   const fire = () => {
     // Agents write constantly; one burst of appends is one rescan.
     clearTimeout(timer);
     timer = setTimeout(onChange, 1_000);
   };
 
-  try {
-    const w = fs.watch(PROJECTS_DIR, { recursive: true }, fire);
-    w.on('error', () => {});
-    return () => {
-      clearTimeout(timer);
-      w.close();
-    };
-  } catch {
-    return () => clearTimeout(timer);
-  }
+  const add = (dir, recursive) => {
+    try {
+      const w = fs.watch(dir, { recursive }, fire);
+      // A root that goes away — an unmounted volume, a deleted container
+      // directory — must not take the process with it.
+      w.on('error', () => {});
+      if (closed) w.close();
+      else watchers.push(w);
+    } catch {
+      /* not watchable here; the refresh button still works */
+    }
+  };
+
+  listRoots()
+    .then((roots) => {
+      if (closed) return;
+      for (const root of roots) add(path.join(root.dir, 'projects'), true);
+      for (const dir of fleetDirs()) add(dir, false);
+    })
+    .catch(() => {});
+
+  return () => {
+    closed = true;
+    clearTimeout(timer);
+    for (const w of watchers) {
+      try {
+        w.close();
+      } catch {
+        /* already gone */
+      }
+    }
+  };
 }

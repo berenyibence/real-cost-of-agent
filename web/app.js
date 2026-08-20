@@ -233,6 +233,19 @@ const CUTS = [
   },
   { id: 'byModel', label: 'By model', hint: 'Which models the money went to.' },
   { id: 'byProject', label: 'By project', hint: 'Which codebases cost the most.' },
+  {
+    id: 'bySource',
+    label: 'By agent',
+    hint: 'Which machine or container ran it.',
+    /**
+     * Hidden until there is a fleet, because a split of one is not a split.
+     * Every headless container works in the same directory, so the by-project
+     * cut collapses them into one row and this is the only cut that can tell
+     * them apart — but on a laptop it would be that same one row again under a
+     * second heading.
+     */
+    when: (data) => (data.bySource?.length ?? 0) > 1,
+  },
   { id: 'byDay', label: 'By day', hint: 'When the spend happened.' },
   {
     id: 'bySession',
@@ -910,6 +923,9 @@ function tokenStrip(s) {
 function sessionRow(s, max) {
   const facts = [
     s.project,
+    // Only when there is a fleet. On one machine every row would carry the same
+    // word, which is noise in a line that is already five facts long.
+    state.spend?.bySource?.length > 1 && s.source ? `agent ${s.source}` : null,
     s.requests ? plural(s.requests, 'request') : null,
     when(s.startedAt, s.endedAt),
     `cache ${percent(s.cacheHitRate, 1)}`,
@@ -964,7 +980,7 @@ function sessionRow(s, max) {
  */
 const sessionFilter = h('input', {
   type: 'search',
-  placeholder: 'Filter by session or project…',
+  placeholder: 'Filter by session, project or agent…',
   'aria-label': 'Filter sessions',
   oninput: () => {
     // A new search is a new list, so the reveal starts over — otherwise
@@ -1006,7 +1022,8 @@ function matchingSessions() {
     ? rows.filter(
         (s) =>
           String(s.name ?? '').toLowerCase().includes(q) ||
-          String(s.project ?? '').toLowerCase().includes(q),
+          String(s.project ?? '').toLowerCase().includes(q) ||
+          String(s.source ?? '').toLowerCase().includes(q),
       )
     : rows;
   const sort = SESSION_SORTS.find((s) => s.id === state.sessions.sort) ?? SESSION_SORTS[0];
@@ -1195,17 +1212,36 @@ function byDay(rows) {
   return h('div', {}, chart, axis, foot);
 }
 
+/**
+ * Agent rows, with the one that is not a container named as one.
+ *
+ * `local` is the machine serving this page, and calling it `local` in a list
+ * beside `build-01` reads as another container. The id stays the id; only the
+ * label changes, and only here — see the invariant about prose in the UI saying
+ * what a thing is.
+ */
+function agentRows(rows = []) {
+  return rows.map((r) => (r.id === 'local' ? { ...r, name: 'This machine' } : r));
+}
+
 function whereItWent() {
   const data = state.spend;
-  const cut = CUTS.find((c) => c.id === state.cut);
+  // A cut with nothing to show is not offered. `state.cut` can still be
+  // pointing at one — the fleet was there a moment ago and a rescan found it
+  // gone — so the picker falling back is what stops that rendering as a card
+  // with no body and no selected tab.
+  const cuts = CUTS.filter((c) => !c.when || c.when(data));
+  if (!cuts.some((c) => c.id === state.cut)) state.cut = cuts[0].id;
+  const cut = cuts.find((c) => c.id === state.cut);
 
-  const picker = segmented(CUTS, state.cut, (id) => {
+  const picker = segmented(cuts, state.cut, (id) => {
     state.cut = id;
     render();
   });
 
   let body;
   if (state.cut === 'components') body = components(data.components);
+  else if (state.cut === 'bySource') body = buckets(agentRows(data.bySource), data.total);
   else if (state.cut === 'byDay') body = byDay(data.byDay);
   // Checked before building: the browser is a filter box and a sort row around
   // the list, so it is never childless and would never reach the empty state

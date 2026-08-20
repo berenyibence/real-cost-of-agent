@@ -61,6 +61,9 @@ Environment
   PORT=4400                       listen on another port (default 4319)
   HOST=127.0.0.1                  bind address; loopback by default
   CLAUDE_HOME=/path/to/.claude    read transcripts from somewhere else
+  CLAUDE_FLEET=/srv/agents        price containers too: a directory of
+                                  agents, one agent, or several of either
+                                  separated by : (; on Windows)
   XDG_CONFIG_HOME=/path/to/config where this app stores your plan
 
 Runs on Linux, macOS and Windows. It reads ~/.claude, writes one
@@ -272,7 +275,20 @@ const server = http.createServer(async (req, res) => {
           workspaces: idx.workspaces.length,
           scannedAt: idx.scannedAt,
           claudeDir: CLAUDE_DIR,
-          found: claudeCodeFound(),
+          /**
+           * Whether *any* agent had a `projects/` directory, not just this
+           * machine. A host that only runs containers has no `~/.claude` of its
+           * own, and telling it there is no Claude Code here would be true and
+           * useless — the transcripts it is being asked about are in the fleet.
+           */
+          found: (idx.sources ?? []).some((s) => s.found),
+          /**
+           * One entry per agent, including the ones that came back empty. An
+           * unreadable root is the failure mode worth naming: it looks exactly
+           * like an agent that did no work, and this app exists not to report
+           * numbers that quietly left something out.
+           */
+          sources: idx.sources ?? [],
         },
       });
     }
@@ -325,13 +341,32 @@ startWatching();
 server.listen(PORT, HOST, () => {
   const idx = getIndex();
   const took = Date.now() - started;
-  if (!claudeCodeFound()) {
+  const sources = idx.sources ?? [];
+  const live = sources.filter((s) => s.found);
+
+  if (!live.length) {
     console.log(`[real-cost] no Claude Code transcripts found at ${CLAUDE_DIR}`);
   } else {
+    // The agents that contributed, not the roots that were readable: a host
+    // that runs containers has an empty `~/.claude` of its own, and counting it
+    // would say "from 3 agents" about work that came from two.
+    const worked = sources.filter((s) => s.sessions > 0);
+    const agents = worked.length > 1 ? ` from ${worked.length} agents` : '';
     console.log(
-      `[real-cost] indexed ${idx.sessions.length} sessions across ${idx.workspaces.length} projects in ${took}ms`,
+      `[real-cost] indexed ${idx.sessions.length} sessions across ${idx.workspaces.length} projects${agents} in ${took}ms`,
     );
   }
+
+  // Named at startup rather than only on the page, because the person who
+  // mistyped `CLAUDE_FLEET` or mounted a volume the server cannot read is
+  // looking at a terminal, and an agent contributing nothing is indistinguishable
+  // from an agent that did nothing.
+  for (const source of sources.filter((s) => !s.found)) {
+    if (source.id === 'local' && sources.length > 1) continue;
+    const why = source.unreadable ? 'not readable' : 'no transcripts';
+    console.log(`[real-cost] ${source.id}: ${why} at ${source.path}`);
+  }
+
   console.log(`[real-cost] http://${HOST}:${PORT}`);
 });
 

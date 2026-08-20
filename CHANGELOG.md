@@ -2,6 +2,86 @@
 
 Notable changes, newest first. Dates are the day the change landed on `main`.
 
+## 0.8.0 — 2026-08-20
+
+Agents that are not this machine. `claude -p` in a container is handed an auth token and nothing
+else, writes its transcripts inside the container, and takes them with it when it exits — so by the
+time you want to know what the run cost, the evidence has been deleted.
+
+### Added
+
+- **`CLAUDE_FLEET`, and a fleet of agents to price.** Point it at a directory the containers write
+  into and every agent under it is scanned alongside this machine. An entry is either one agent's
+  `~/.claude` or a directory of them, decided by whether it has a `projects/` inside it, so one
+  variable covers "my one build box" and "where forty containers write" without a second variable to
+  say which you meant. Several entries separate with the platform's path delimiter. A container that
+  did not exist when the server started appears on the next scan, and the watcher watches the fleet
+  directory itself so it does not have to be asked.
+
+  The collection mechanism is a bind mount, not an agent and not an endpoint:
+
+  ```bash
+  docker run --rm -e ANTHROPIC_API_KEY \
+    -v /srv/agents/build-01/projects:/root/.claude/projects \
+    your-image claude -p "run the release checks"
+
+  CLAUDE_FLEET=/srv/agents npx real-cost-of-agent
+  ```
+
+  Nothing is pushed and there is nothing listening. This server has no authentication because it
+  binds to loopback and reads files; an ingest endpoint would need some, and an unauthenticated local
+  endpoint feeding a money figure is the failure this project exists to avoid. It still makes no
+  outbound request of any kind. See **Agents in containers** in the README for the rest of the rules —
+  mount `projects/` rather than the whole `~/.claude`, so the auth token you passed in stays in the
+  container, and one directory per container, so they cannot read each other's prompts and source.
+
+- **A "By agent" cut**, which is the one the by-project cut cannot be. Every headless container works
+  in `/workspace`, so forty of them collapse into a single project row named `workspace` — correct,
+  since it is one codebase, and useless for the only question a fleet operator has. The cut appears
+  only when there is more than one agent, because a split of one is not a split, and each session row
+  names its agent so several hundred identically-named runs can be told apart.
+
+- **Agents that could not be read are named**, on startup and on `/api/spend`. A container running as
+  root writes root-owned files, and a server that cannot read them otherwise looks exactly like an
+  agent that did no work. A missing path — a typo, a volume not mounted yet — is distinguished from
+  one that exists and is unreadable, because only one of those is a configuration mistake.
+
+### Fixed
+
+- **Two containers that ran the same session id were one session.** Every container works in the same
+  directory, so every one of them writes to a project directory of the same name, and the map that
+  groups a session's transcripts was keyed by id alone. A repeated id — `--session-id` pinned, or an
+  image with a transcript baked into it — had the second overwrite the first and take its money with
+  it: no row anywhere, under a heading promising a breakdown, with every cut still summing to a total
+  the work had never reached. Grouping is per root now. Found while building the fleet rather than
+  after shipping it, but it is the same failure as the subagent one, so it is written down here too.
+
+### Security
+
+- **A fleet root is untrusted input, and is read as such.** Those directories are written by
+  containers, which makes a path in one attacker-controlled in the way a path off a network request
+  is. What you name in `CLAUDE_FLEET` is yours and may be a symlink into a volume; what is discovered
+  underneath it is taken from the type `readdir` reports, which is false for a symlink — so
+  `projects/x -> /` cannot make the scan walk the host, and `secret.jsonl -> /somewhere/private`
+  cannot be read and priced.
+
+  `projects` itself gets the same treatment in a fleet root, and it is the one that nearly got
+  through. It is the last component of the path `readdir` is called on, and `readdir` follows the last
+  component — so a container handed `<root>` rather than `<root>/projects`, which is the layout people
+  will reach for, could have created `projects` as a symlink to anywhere. The local root still follows
+  it, because that is the user's own home and relocating `~/.claude/projects` to another disk is
+  something people legitimately do.
+
+  Nothing in a fleet root is ever written. All of it is held by
+  [`test/fleet.test.js`](test/fleet.test.js), including that a scan leaves every byte where it was.
+
+- **Agent names cannot reach a post.** `shareFacts` is an allowlist, so `bySource` was excluded the
+  moment it existed rather than needing to be removed — which is the argument for an allowlist over a
+  redaction pass. A container is usually named after the customer, the branch or the internal service
+  it builds, so "which of my agents cost the most" is a sentence about somebody's infrastructure.
+  [`test/share.test.js`](test/share.test.js) now seeds agent names and host paths into every field
+  that has one and asserts none of them appear in any angle, in any tone.
+
 ## 0.7.0 — 2026-08-20
 
 Windows and macOS are supported platforms rather than platforms nobody had checked. Three things
