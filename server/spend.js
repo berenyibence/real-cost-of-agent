@@ -7,12 +7,12 @@
  * number can always be opened until it stops being a mystery.
  *
  * Every figure is derived from recorded token counts at published rates. The
- * multipliers are the ones the API actually bills: cache reads at 0.1x input,
- * 5-minute cache writes at 1.25x, 1-hour writes at 2x.
+ * multipliers are the ones the API actually bills: cache reads at 0.1x input
+ * (0.05x on Opus 5.5, 0.025x on Fable and Mythos 5.1), 5-minute cache writes at
+ * 1.25x, 1-hour writes at 2x.
  */
 
 import {
-  CACHE_READ_MULTIPLIER,
   CACHE_WRITE_1H_MULTIPLIER,
   CACHE_WRITE_5M_MULTIPLIER,
   WEB_SEARCH_RATE,
@@ -23,6 +23,11 @@ import { dayKey, eachDay } from './day.js';
 
 /**
  * Every component is `count` of some `unit` at a rate, times a multiplier.
+ *
+ * The multiplier is a number, or a function of the rates where it differs by
+ * model: a cache hit is 0.1x input on most, but 0.05x on Opus 5.5 and 0.025x on
+ * Fable 5.1, and a constant here would put this column out of step with the
+ * total `costOf` computes.
  *
  * `unit` is `tokens` for all but one of them. Web search is billed per search,
  * and it is here rather than off to one side because the components have to add
@@ -69,11 +74,13 @@ const COMPONENTS = [
   {
     id: 'cacheRead',
     label: 'Cache read',
-    hint: 'Re-reading a cached prefix at a tenth of the input rate. This is where caching pays.',
+    hint:
+      'Re-reading a cached prefix at a tenth of the input rate, or less on the newest models. ' +
+      'This is where caching pays.',
     unit: 'tokens',
     count: (u) => u.cacheReadTokens,
     rate: (r) => r.input,
-    multiplier: CACHE_READ_MULTIPLIER,
+    multiplier: (r) => r.cacheReadMultiplier,
   },
   {
     id: 'webSearch',
@@ -149,13 +156,14 @@ export function componentsOf(session) {
       : [{ usage: session.usage, rates: requestRates(spec.id, session.usage) }];
 
   const headline = requestRates(spec.id);
+  const mult = (c, rates) => (typeof c.multiplier === 'function' ? c.multiplier(rates) : c.multiplier);
   return COMPONENTS.map((c) => {
     let count = 0;
     let cost = 0;
     for (const { usage, rates } of slices) {
       const n = c.count(usage) ?? 0;
       count += n;
-      cost += n * c.rate(rates) * c.multiplier;
+      cost += n * c.rate(rates) * mult(c, rates);
     }
     return {
       id: c.id,
@@ -163,14 +171,14 @@ export function componentsOf(session) {
       hint: c.hint,
       unit: c.unit,
       count,
-      multiplier: c.multiplier,
+      multiplier: mult(c, headline),
       /**
        * Dollars per unit — per token, or per search on the one row that is not
        * tokens. The headline rate stays the primary model's standard rate: it is
        * a label for the component, and a figure blended across models, or across
        * a mid-run switch to fast mode, is a number nobody was charged.
        */
-      unitCost: c.rate(headline) * c.multiplier,
+      unitCost: c.rate(headline) * mult(c, headline),
       cost,
     };
   });
