@@ -5,8 +5,9 @@
  * API. Partner platforms (Bedrock, Vertex) price separately and are not modelled
  * here; a session run through one of those is labelled as an estimate.
  *
- * Cache economics (same for every model):
- *   read       0.1x  the model's input rate
+ * Cache economics:
+ *   read       0.1x  the model's input rate — except where an entry carries its
+ *                    own `cacheRead` (0.05x Opus 5.5, 0.025x Fable/Mythos 5.1)
  *   write 5m   1.25x
  *   write 1h   2x
  * Transcripts record the 5m/1h split per request, so cost is computed exactly
@@ -19,18 +20,43 @@
 
 /**
  * Rates in $/MTok. `promo.until` marks promotional pricing with an end date.
- * `fastInput`/`fastOutput` are the published fast-mode rates, on the two models
- * that have them.
+ * `fastInput`/`fastOutput` are the published fast-mode rates, on the three
+ * models that have them. `cacheRead` is the cache-hit multiplier, on the models
+ * that publish one other than 0.1x.
  *
  * No entry carries a `promo` today — Sonnet 5's introductory rate became its
  * standard rate — but the mechanism stays, because the rule it enforces does: a
  * promotion is an offer on one named model for one stated period, and
  * `lookupModel` must never extend it to an id nobody has published a price for.
  *
- * Verified against the published rate card on 2026-08-11, including the
+ * Verified against the published rate card on 2026-09-30, including the
  * per-model cache columns.
  */
 const CATALOG = {
+  'claude-fable-5-1': {
+    name: 'Fable 5.1',
+    tier: 'fable',
+    input: 10,
+    output: 50,
+    /**
+     * Same base rate as Fable 5, but a cache hit is 0.025x input — $0.25/MTok
+     * against Fable 5's $1. Claude Code sessions are mostly cache reads, so
+     * pricing these at the old 0.1x would overstate a Fable 5.1 session several
+     * times over while every column still summed perfectly.
+     */
+    cacheRead: 0.025,
+    context: 1_000_000,
+    maxOutput: 128_000,
+  },
+  'claude-mythos-5-1': {
+    name: 'Mythos 5.1',
+    tier: 'fable',
+    input: 10,
+    output: 50,
+    cacheRead: 0.025,
+    context: 1_000_000,
+    maxOutput: 128_000,
+  },
   'claude-fable-5': {
     name: 'Fable 5',
     tier: 'fable',
@@ -44,6 +70,21 @@ const CATALOG = {
     tier: 'fable',
     input: 10,
     output: 50,
+    context: 1_000_000,
+    maxOutput: 128_000,
+  },
+  'claude-opus-5-5': {
+    name: 'Opus 5.5',
+    tier: 'opus',
+    // Cheaper than Opus 5 on every column, and as the first Opus entry it is
+    // also what an unrecognised Opus id is now priced at.
+    input: 4,
+    output: 20,
+    // 0.05x input: $0.20/MTok, not the $0.40 a 0.1x multiplier would give.
+    cacheRead: 0.05,
+    // Double the standard rate, as on Opus 5 — but double of $4/$20.
+    fastInput: 8,
+    fastOutput: 40,
     context: 1_000_000,
     maxOutput: 128_000,
   },
@@ -69,7 +110,7 @@ const CATALOG = {
     tier: 'opus',
     input: 5,
     output: 25,
-    // The other model with published fast-mode pricing. Opus 4.7 had it
+    // Also has published fast-mode pricing. Opus 4.7 had it
     // withdrawn and Opus 4.6 never had it, so neither carries these.
     fastInput: 10,
     fastOutput: 50,
@@ -118,6 +159,14 @@ const CATALOG = {
     context: 200_000,
     maxOutput: 32_000,
     legacy: true,
+  },
+  'claude-sonnet-5-5': {
+    name: 'Sonnet 5.5',
+    tier: 'sonnet',
+    input: 2,
+    output: 10,
+    context: 1_000_000,
+    maxOutput: 128_000,
   },
   'claude-sonnet-5': {
     name: 'Sonnet 5',
@@ -325,6 +374,13 @@ export function lookupModel(model) {
      */
     fastInputRate: entry.fastInput ?? null,
     fastOutputRate: entry.fastOutput ?? null,
+    /**
+     * What a cache hit costs as a fraction of input. 0.1x everywhere until Opus
+     * 5.5 and Fable 5.1 published their own; an inferred spec inherits its tier
+     * default's, for the same reason it inherits the base rate — it is that
+     * model's list price, not an offer.
+     */
+    cacheReadMultiplier: entry.cacheRead ?? CACHE_READ_MULTIPLIER,
     promoUntil: promoActive ? entry.promo.until : null,
   };
 }
@@ -335,8 +391,8 @@ export function lookupModel(model) {
  * The catalog gives the rate for a model; two things recorded on the request
  * itself move it, and both were previously read past:
  *
- * **`speed: "fast"`** bills at the model's fast-mode rate — $10/$50 on Opus 5
- * and Opus 4.8, double the standard card. On a model with no published fast rate
+ * **`speed: "fast"`** bills at the model's fast-mode rate — $8/$40 on Opus 5.5,
+ * $10/$50 on Opus 5 and Opus 4.8, double the standard card in each case. On a model with no published fast rate
  * the flag changes nothing, which is also what the API does (Opus 4.6 runs such
  * a request at standard speed and bills it at standard rates).
  *
@@ -365,18 +421,21 @@ export function requestRates(model, usage = {}) {
   if (!spec) return null;
   const fast = usage.speed === 'fast' && spec.fastInputRate != null;
   const geo = usage.inferenceGeo === 'us' ? GEO_US_MULTIPLIER : 1;
+  const input = ((fast ? spec.fastInputRate : spec.inputRate) / 1_000_000) * geo;
   return {
     spec,
     /** True only when the request ran fast *and* the model prices it. */
     fast,
     geoMultiplier: geo,
-    input: ((fast ? spec.fastInputRate : spec.inputRate) / 1_000_000) * geo,
+    input,
     output: ((fast ? spec.fastOutputRate : spec.outputRate) / 1_000_000) * geo,
     /**
      * Per search rather than per token, and no geo multiplier: the 1.1x is
      * published for token categories, and a search is not one.
      */
     webSearch: WEB_SEARCH_RATE,
+    /** A cache hit's fraction of `input` — per model, no longer a constant. */
+    cacheReadMultiplier: spec.cacheReadMultiplier,
   };
 }
 
@@ -394,7 +453,7 @@ export function costOf(model, usage) {
   return (
     (usage.inputTokens ?? 0) * rates.input +
     (usage.outputTokens ?? 0) * rates.output +
-    (usage.cacheReadTokens ?? 0) * rates.input * CACHE_READ_MULTIPLIER +
+    (usage.cacheReadTokens ?? 0) * rates.input * rates.cacheReadMultiplier +
     (usage.cacheWrite5m ?? 0) * rates.input * CACHE_WRITE_5M_MULTIPLIER +
     (usage.cacheWrite1h ?? 0) * rates.input * CACHE_WRITE_1H_MULTIPLIER +
     (usage.webSearchRequests ?? 0) * rates.webSearch

@@ -14,7 +14,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CACHE_READ_MULTIPLIER,
   CACHE_WRITE_1H_MULTIPLIER,
   CACHE_WRITE_5M_MULTIPLIER,
   costOf,
@@ -144,14 +143,14 @@ test('a model that does not exist yet is priced at its tier, and says so', () =>
   // Against the tier's *newest* non-legacy entry, which is what TIER_DEFAULT
   // resolves to. This used to compare against Sonnet 4.6 and passed only
   // because both were $3 at the time — it could not have told the two apart.
-  assert.equal(spec.inputRate, lookupModel('claude-sonnet-5').listInputRate);
+  assert.equal(spec.inputRate, lookupModel('claude-sonnet-5-5').listInputRate);
   assert.match(spec.name, /claude-sonnet-9-9/, 'the name has to say what actually ran');
   assert.equal(spec.requested, 'claude-sonnet-9-9');
 });
 
 test('an inferred model produces a real cost rather than zero', () => {
   const usage = { inputTokens: 1_000_000, outputTokens: 100_000 };
-  assert.equal(costOf('claude-opus-7', usage), costOf('claude-opus-5', usage));
+  assert.equal(costOf('claude-opus-7', usage), costOf('claude-opus-5-5', usage));
 });
 
 test('a provider prefix does not defeat the inference', () => {
@@ -200,7 +199,12 @@ test("an inferred rate is the list rate, never someone else's promotion", () => 
 
 /**
  * The published first-party rate card, transcribed from
- * platform.claude.com/docs/en/about-claude/pricing on 2026-08-11.
+ * platform.claude.com/docs/en/about-claude/pricing on 2026-08-11, and extended
+ * with Fable 5.1, Mythos 5.1, Opus 5.5 and Sonnet 5.5 on 2026-09-30.
+ *
+ * Those three new cache-hit figures are the first that are not 0.1x input —
+ * $0.25 on a $10 base, $0.20 on a $4 base — which is exactly the drift the
+ * cache column exists to catch.
  *
  * Both halves of each row earn their place. The base rates catch a stale or
  * mistyped entry. The cache columns catch a drifted multiplier — and they
@@ -212,8 +216,11 @@ test("an inferred rate is the list rate, never someone else's promotion", () => 
  */
 const RATE_CARD = [
   // id,                 input, output, 5m write, 1h write, cache hit
+  ['claude-fable-5-1',   10,    50,     12.5,     20,       0.25],
+  ['claude-mythos-5-1',  10,    50,     12.5,     20,       0.25],
   ['claude-fable-5',     10,    50,     12.5,     20,       1],
   ['claude-mythos-5',    10,    50,     12.5,     20,       1],
+  ['claude-opus-5-5',    4,     20,     5,        8,        0.2],
   ['claude-opus-5',      5,     25,     6.25,     10,       0.5],
   ['claude-opus-4-8',    5,     25,     6.25,     10,       0.5],
   ['claude-opus-4-7',    5,     25,     6.25,     10,       0.5],
@@ -221,6 +228,7 @@ const RATE_CARD = [
   ['claude-opus-4-5',    5,     25,     6.25,     10,       0.5],
   ['claude-opus-4-1',    15,    75,     18.75,    30,       1.5],
   ['claude-opus-4-0',    15,    75,     18.75,    30,       1.5],
+  ['claude-sonnet-5-5',  2,     10,     2.5,      4,        0.2],
   ['claude-sonnet-5',    2,     10,     2.5,      4,        0.2],
   ['claude-sonnet-4-6',  3,     15,     3.75,     6,        0.3],
   ['claude-sonnet-4-5',  3,     15,     3.75,     6,        0.3],
@@ -249,22 +257,25 @@ test('the cache columns the API publishes are the ones this app charges', () => 
     const rate = lookupModel(id).listInputRate;
     assert.ok(near(rate * CACHE_WRITE_5M_MULTIPLIER, write5m), `${id} 5m write`);
     assert.ok(near(rate * CACHE_WRITE_1H_MULTIPLIER, write1h), `${id} 1h write`);
-    assert.ok(near(rate * CACHE_READ_MULTIPLIER, hit), `${id} cache hit`);
+    // Through `costOf`, not the spec field, so the multiplier the bill actually
+    // uses is the one checked.
+    assert.ok(near(costOf(id, usage({ cacheReadTokens: 1_000_000 })), hit), `${id} cache hit`);
   }
 });
 
 /**
  * The published fast-mode card, same source and date. Fast mode is the same
- * model at up to 2.5x the output speed, billed at its own rate — and only two
+ * model at up to 2.5x the output speed, billed at its own rate — and only three
  * models have one.
  */
 const FAST_RATE_CARD = [
   // id,               fast input, fast output
+  ['claude-opus-5-5', 8, 40],
   ['claude-opus-5', 10, 50],
   ['claude-opus-4-8', 10, 50],
 ];
 
-test('the two models with fast-mode pricing carry the published fast rates', () => {
+test('the models with fast-mode pricing carry the published fast rates', () => {
   for (const [id, input, output] of FAST_RATE_CARD) {
     const spec = lookupModel(id);
     assert.equal(spec.fastInputRate, input, `${id} fast input`);
@@ -294,6 +305,16 @@ test('a request that ran fast is billed at the fast rate, not the standard one',
   assert.ok(near(costOf('claude-opus-5', { ...u, speed: 'fast' }), 60));
 });
 
+test('a cache hit on Opus 5.5 and Fable 5.1 is billed below the usual tenth', () => {
+  // The standard 0.1x would price a million cache reads at $0.40 and $1.00.
+  const reads = usage({ cacheReadTokens: 1_000_000 });
+  assert.ok(near(costOf('claude-opus-5-5', reads), 0.2));
+  assert.ok(near(costOf('claude-fable-5-1', reads), 0.25));
+  assert.ok(near(costOf('claude-fable-5', reads), 1), 'Fable 5 keeps the 0.1x hit');
+  // Stacks with fast mode and the US pin like every other multiplier.
+  assert.ok(near(costOf('claude-opus-5-5', { ...reads, speed: 'fast', inferenceGeo: 'us' }), 0.44));
+});
+
 test('the cache multipliers stack on top of the fast base rate', () => {
   // A 1h write on fast Opus 5 is 2x of $10, not 2x of $5.
   const u = { ...usage({ cacheWrite1h: 1_000_000, cacheReadTokens: 1_000_000 }), speed: 'fast' };
@@ -313,7 +334,7 @@ test('an inferred model inherits its tier default including the fast rate', () =
   // under-pricing is the flattering direction this app exists to catch.
   const standard = usage({ outputTokens: 1_000_000 });
   const fast = { ...standard, speed: 'fast' };
-  assert.equal(costOf('claude-opus-9-9', fast), costOf('claude-opus-5', fast));
+  assert.equal(costOf('claude-opus-9-9', fast), costOf('claude-opus-5-5', fast));
   assert.ok(costOf('claude-opus-9-9', fast) > costOf('claude-opus-9-9', standard));
 });
 

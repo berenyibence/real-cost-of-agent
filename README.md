@@ -276,7 +276,7 @@ taken by the thing that was billed, not an estimate made afterwards by counting 
   depending on two fields the transcript already records, and both are per request rather than per
   session:
   - **`/fast` is billed at its own published rate.** Fast mode runs Opus 5 and Opus 4.8 at $10/$50
-    instead of $5/$25 — **exactly double** — and it can be toggled mid-run. Pricing those off the
+    instead of $5/$25, and Opus 5.5 at $8/$40 instead of $4/$20 — **exactly double** — and it can be toggled mid-run. Pricing those off the
     standard column halves them.
   - **US-pinned inference adds 1.1×** on every category.
 
@@ -285,7 +285,8 @@ taken by the thing that was billed, not an estimate made afterwards by counting 
 - **Rates are per model, in `server/models.js`.** They are USD per million tokens as published for
   the first-party Anthropic API. Partner platforms (Bedrock, Vertex) price separately and are not
   modelled.
-- **Cache traffic is billed at its real multipliers**: reads at 0.1×, 5-minute writes at 1.25×,
+- **Cache traffic is billed at its real multipliers**: reads at 0.1× (0.05× on Opus 5.5, 0.025× on
+  Fable 5.1 and Mythos 5.1), 5-minute writes at 1.25×,
   1-hour writes at 2×. The transcript records the TTL split per request, so this is computed rather
   than assumed. When a write carries no split it is attributed to 5m — the cheaper TTL, so an
   unknown can never inflate the bill.
