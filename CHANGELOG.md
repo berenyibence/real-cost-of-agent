@@ -2,7 +2,7 @@
 
 Notable changes, newest first. Dates are the day the change landed on `main`.
 
-## 0.8.0 — 2026-08-20
+## 0.8.0 — 2026-09-30
 
 Agents that are not this machine. `claude -p` in a container is handed an auth token and nothing
 else, writes its transcripts inside the container, and takes them with it when it exits — so by the
@@ -52,6 +52,16 @@ time you want to know what the run cost, the evidence has been deleted.
   Linux and `ENOENT` on Windows, so the same fleet entry was a configuration error on one and an
   empty agent on the other. Windows CI caught it. It now names the two cases that mean the same
   thing everywhere: a refusal thrown by `scan.js` itself, and the permission codes libuv normalises.
+
+- **Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 are priced exactly**, rather than inferred from
+  their tier. Opus 5.5 is $4/$20 with fast mode at $8/$40; Sonnet 5.5 is $2/$10; Fable 5.1 and
+  Mythos 5.1 are $10/$50. Each is now the newest entry in its tier, so an Opus, Sonnet or Fable id
+  the catalog has not heard of is priced at one of these instead.
+
+  A cache hit is no longer 0.1× input on every model: Opus 5.5 bills it at 0.05× and Fable/Mythos 5.1
+  at 0.025×. Claude Code sessions are mostly cache reads, so the old constant would have overstated a
+  Fable 5.1 session several times over. The cache-read row uses each slice's own multiplier, and
+  still sums with the rest to the total.
 
 ### Fixed
 
