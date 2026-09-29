@@ -1,6 +1,6 @@
 {
   "name": "real-cost-of-agent",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "description": "What your agent would have cost. Prices the transcripts Claude Code already writes to your disk — local, single page, zero dependencies.",
   "license": "Apache-2.0",
   "author": "Bence Berenyi",

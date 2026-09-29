@@ -19,11 +19,20 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { CLAUDE_DIR } from './scan.js';
-import { CONFIG_DIR, LEGACY_CONFIG_DIR } from './paths.js';
+import { CONFIG_DIR, LEGACY_CONFIG_DIRS } from './paths.js';
 
 const TELEMETRY_DIR = path.join(CLAUDE_DIR, 'telemetry');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
-const LEGACY_CONFIG_FILE = path.join(LEGACY_CONFIG_DIR, 'config.json');
+
+/**
+ * The one file that is written, then every older location, in order.
+ *
+ * There is more than one older location because the file has moved twice: the
+ * project was renamed, and Windows moved from a dotfile directory in the profile
+ * root to `%APPDATA%`. `paths.js` decides what is on the list; the rule here is
+ * only that the first readable one wins and none of the rest are ever written.
+ */
+const READ_ORDER = [CONFIG_FILE, ...LEGACY_CONFIG_DIRS.map((dir) => path.join(dir, 'config.json'))];
 
 /**
  * Default monthly prices, in USD. These are starting points the user can edit —
@@ -155,9 +164,9 @@ export function sanitizeConfig(raw) {
   return { periods: [sanitizePeriod(raw)] };
 }
 
-/** The stored preferences, falling back to the pre-rename location before the defaults. */
+/** The stored preferences, falling back to every older location before the defaults. */
 export function readConfig() {
-  for (const file of [CONFIG_FILE, LEGACY_CONFIG_FILE]) {
+  for (const file of READ_ORDER) {
     try {
       return sanitizeConfig(JSON.parse(fs.readFileSync(file, 'utf8')));
     } catch {

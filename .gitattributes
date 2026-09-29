@@ -1,0 +1,13 @@
+# `.editorconfig` asks editors for LF; this is the half that holds for git.
+#
+# Without it a Windows clone with `core.autocrlf=true` checks every file out with
+# CRLF endings, which is mostly invisible and twice not: `server/index.js` is the
+# published binary and its shebang stops being one the moment a carriage return
+# lands on the end of it, and a working tree that differs from the repository by
+# a line ending is a working tree where every diff is the whole file.
+* text=auto eol=lf
+
+# Screenshots. Detected as binary anyway; said out loud so a future asset with an
+# unlucky first kilobyte cannot be guessed wrong.
+*.png binary
+*.ico binary

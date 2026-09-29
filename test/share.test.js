@@ -43,6 +43,14 @@ const SECRETS = [
   'Fix the payroll export before Sunday',
   'ada',
   'stripe-migration',
+  // Agent names, which arrive with a fleet. A container is usually named after
+  // the customer, the branch or the internal service it builds, so "which of my
+  // agents cost the most" is a sentence about somebody's infrastructure and
+  // sometimes about somebody's client list. It is aggregate data, which is
+  // exactly why an allowlist rather than a redaction pass is the right shape
+  // here: aggregate is not the same as safe to publish.
+  'acme-prod-runner',
+  'ci-branch-payroll-fix',
 ];
 
 const payload = {
@@ -61,6 +69,10 @@ const payload = {
     { id: 'stripe-migration', name: 'stripe-migration', path: '/Users/ada/dev/stripe-migration', cost: 384.42 },
   ],
   byModel: [{ id: 'claude-opus-5', name: 'Claude Opus 5', cost: 1284.42 }],
+  bySource: [
+    { id: 'acme-prod-runner', cost: 900, share: 0.7, sessions: 40 },
+    { id: 'ci-branch-payroll-fix', cost: 384.42, share: 0.3, sessions: 12 },
+  ],
   byDay: [{ id: '2026-07-01', date: '2026-07-01', cost: 1284.42 }],
   // The richest rows on the payload, and so the ones with most to leak: a
   // session title is whatever the user typed first, and the project name is the
@@ -72,6 +84,7 @@ const payload = {
       id: 's1',
       name: 'Fix the payroll export before Sunday',
       project: 'acme-billing-rewrite',
+      source: 'acme-prod-runner',
       model: 'Claude Opus 5',
       models: 2,
       inferred: false,
@@ -94,6 +107,7 @@ const payload = {
       id: 's2',
       name: 'stripe-migration cleanup',
       project: 'stripe-migration',
+      source: 'ci-branch-payroll-fix',
       model: 'Claude Haiku 4.5',
       models: 1,
       inferred: true,
@@ -136,6 +150,14 @@ const payload = {
     workspaces: 12,
     claudeDir: '/Users/ada/.claude',
     found: true,
+    // One entry per agent, and every one of them names a host path and a
+    // container. `/api/spend` carries this because the page has to be able to
+    // say which agent it could not read; a post must not.
+    sources: [
+      { id: 'local', path: '/Users/ada/.claude', found: true, sessions: 6 },
+      { id: 'acme-prod-runner', path: '/srv/agents/acme-prod-runner', found: true, sessions: 40 },
+      { id: 'ci-branch-payroll-fix', path: '/srv/agents/ci-branch-payroll-fix', found: false, sessions: 0 },
+    ],
   },
 };
 

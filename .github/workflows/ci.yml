@@ -19,10 +19,19 @@ jobs:
       fail-fast: false
       matrix:
         # 20.11 is the floor `engines` claims, so it is tested rather than
-        # assumed. Windows is here because `server/paths.js` and `server/day.js`
-        # both do things that are quietly platform-specific.
+        # assumed. All three operating systems are here because this app reads
+        # paths off somebody's disk and writes a preference file into their
+        # profile, and both of those differ on Windows in ways that produce a
+        # plausible wrong answer rather than an error.
+        #
+        # macOS runs one Node rather than three: it shares every path decision
+        # with Linux, so what is being checked there is the platform, not the
+        # matrix. Windows is the one that disagrees, and it runs the lot.
         os: [ubuntu-latest, windows-latest]
         node: ['20.11', '22', '24']
+        include:
+          - os: macos-latest
+            node: '22'
     steps:
       - uses: actions/checkout@v4
 
@@ -40,101 +49,20 @@ jobs:
             exit 1
           fi
 
+      # This is the whole suite, and it includes the smoke test: `test/smoke.test.js`
+      # boots server/index.js, hits every route, and checks the policy header,
+      # the traversal refusals and the access rules. That used to be a shell
+      # block in this file, which meant the assertions most likely to differ on
+      # Windows were the ones only ever checked on Linux.
       - run: npm test
 
-  smoke:
-    name: it starts, serves, and finds nothing gracefully
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      # A machine with no transcripts is the first thing a new contributor sees,
-      # and it is the state CI is always in — so it is the state worth smoking.
-      - name: Boot against an empty CLAUDE_HOME and hit every route
-        run: |
-          mkdir -p /tmp/empty-claude
-          CLAUDE_HOME=/tmp/empty-claude XDG_CONFIG_HOME=/tmp/cfg node server/index.js &
-          server=$!
-          for i in $(seq 1 40); do
-            curl -fsS http://127.0.0.1:4319/api/spend >/dev/null 2>&1 && break
-            sleep 0.25
-          done
-          set -e
-          curl -fsS http://127.0.0.1:4319/api/spend   | head -c 400; echo
-          curl -fsS http://127.0.0.1:4319/api/billing | head -c 400; echo
-          curl -fsS http://127.0.0.1:4319/            > /dev/null
-          curl -fsS http://127.0.0.1:4319/app.js      > /dev/null
-          curl -fsS http://127.0.0.1:4319/share.js    > /dev/null
-          curl -fsS http://127.0.0.1:4319/theme.js    > /dev/null
-          curl -fsS http://127.0.0.1:4319/brand/mark.svg > /dev/null
-
-          # The "no network calls, ever" invariant — as something the browser enforces
-          # rather than something the source merely happens to do. A CDN script
-          # or an analytics beacon added later fails here first.
-          csp=$(curl -fsS -D - -o /dev/null http://127.0.0.1:4319/ | tr -d '\r' | grep -i '^content-security-policy:')
-          echo "$csp"
-          echo "$csp" | grep -q "default-src 'self'"
-          echo "$csp" | grep -q "connect-src 'self'"
-          echo "$csp" | grep -q "frame-ancestors 'none'"
-
-          # The theme is a file, not an inline block, precisely so the policy
-          # above needs no script hash. An inline script would silently stop
-          # running under it, and the page would flash the wrong theme.
-          if grep -q '<script>' web/index.html; then
-            echo "::error file=web/index.html::inline script would be blocked by the CSP"
-            exit 1
-          fi
-          # Nothing outside web/ is served, in either spelling. Both currently
-          # 404: the WHATWG URL parser resolves dot segments, and treats %2e as
-          # a dot while doing it, so neither reaches the containment check in
-          # serveStatic. The assertion is on the property that matters — no 200,
-          # and no package.json on the wire — rather than on which of the two
-          # layers happened to catch it, so a change to either is still caught.
-          for path in /../package.json /%2e%2e/package.json /..%2fpackage.json; do
-            code=$(curl -s -o /tmp/body -w '%{http_code}' --path-as-is "http://127.0.0.1:4319$path")
-            echo "$path -> $code"
-            test "$code" != 200
-            grep -q 'real-cost-of-agent' /tmp/body && { echo "::error::served $path"; exit 1; } || true
-          done
-
-          # A fresh Claude Code install has the directory and no transcripts in
-          # it. That is a different first run from "no directory at all", and it
-          # used to be the one that rendered a dashboard full of zeros.
-          mkdir -p /tmp/empty-claude/projects
-          curl -fsS http://127.0.0.1:4319/api/refresh -X POST -H 'Content-Type: application/json' -d '{}' >/dev/null
-          spend=$(curl -fsS http://127.0.0.1:4319/api/spend)
-          echo "$spend" | grep -q '"found":true' || { echo "::error::projects/ exists but found is false"; exit 1; }
-          echo "$spend" | grep -q '"sessions":0' || { echo "::error::expected no sessions"; exit 1; }
-          echo "empty projects/ -> found:true sessions:0, the page's third state"
-
-          # The front door. `test/access.test.js` covers the predicate; this
-          # covers it actually being wired into the request path, which is the
-          # part a refactor can quietly drop.
-          rebind=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example:4319' http://127.0.0.1:4319/api/spend)
-          echo "Host: evil.example -> $rebind"
-          test "$rebind" = 403
-
-          csrf=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-            -H 'Origin: https://evil.example' -H 'content-type: text/plain' \
-            -d '{"planId":"none"}' http://127.0.0.1:4319/api/billing)
-          echo "cross-site POST /api/billing -> $csrf"
-          test "$csrf" = 403
-
-          # And the documented way of running it still works, in both spellings.
-          for host in 127.0.0.1 localhost; do
-            ok=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $host:4319" http://127.0.0.1:4319/api/spend)
-            echo "Host: $host -> $ok"
-            test "$ok" = 200
-          done
-
-          kill $server
-
   package:
-    name: the published tarball is the whole app
-    runs-on: ubuntu-latest
+    name: the published tarball is the whole app · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -146,36 +74,8 @@ jobs:
       # and nowhere else. That failure never shows up in a clone — only for
       # somebody running `npx real-cost-of-agent`, which is now the documented
       # way in. So the tarball gets installed and exercised like a user's.
-      - name: Pack, install elsewhere, and serve from there
-        run: |
-          set -e
-          npm pack --pack-destination /tmp >/dev/null
-          tarball=$(ls /tmp/real-cost-of-agent-*.tgz)
-          echo "packed $(du -h "$tarball" | cut -f1)"
-
-          mkdir -p /tmp/consumer && cd /tmp/consumer
-          npm init -y >/dev/null
-          npm install "$tarball" >/dev/null
-          bin=./node_modules/.bin/real-cost-of-agent
-
-          test "$($bin --version)" = "$(node -p "require('/tmp/consumer/node_modules/real-cost-of-agent/package.json').version")"
-          $bin --help >/dev/null
-          echo "--version and --help answer"
-
-          mkdir -p /tmp/npx-claude/projects
-          CLAUDE_HOME=/tmp/npx-claude XDG_CONFIG_HOME=/tmp/npx-cfg PORT=4361 $bin &
-          server=$!
-          for i in $(seq 1 40); do
-            curl -fsS http://127.0.0.1:4361/api/spend >/dev/null 2>&1 && break
-            sleep 0.25
-          done
-
-          # Every asset the page needs, served out of node_modules rather than a
-          # checkout. A file missing from `files` 404s here.
-          for path in / /theme.js /app.js /share.js /styles.css /brand/mark.svg /api/spend /api/billing; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:4361$path")
-            echo "  $path -> $code"
-            test "$code" = 200
-          done
-
-          kill $server
+      #
+      # On Windows that also exercises two shims that do not exist on Linux:
+      # `npm.cmd`, and the `.cmd` wrapper npm generates for `bin` at install
+      # time. `npx real-cost-of-agent` there goes through both.
+      - run: node scripts/package-check.mjs

@@ -128,8 +128,8 @@ export function withEconomics(session) {
   };
 }
 
-/** @type {{workspaces: any[], sessions: any[], scannedAt: number}} */
-let index = { workspaces: [], sessions: [], scannedAt: 0 };
+/** @type {{workspaces: any[], sessions: any[], sources: any[], scannedAt: number}} */
+let index = { workspaces: [], sessions: [], sources: [], scannedAt: 0 };
 let scanning = null;
 let rescanQueued = false;
 
@@ -145,10 +145,13 @@ export async function refresh() {
     return scanning;
   }
   scanning = (async () => {
-    const { workspaces, sessions } = await scan();
+    const { workspaces, sessions, sources } = await scan();
     index = {
       workspaces,
       sessions: sessions.map(withEconomics),
+      // Passed through untouched: which agents were readable is the scanner's
+      // finding, and pricing has no opinion about it.
+      sources,
       scannedAt: Date.now(),
     };
     return index;

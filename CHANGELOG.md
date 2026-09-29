@@ -2,6 +2,167 @@
 
 Notable changes, newest first. Dates are the day the change landed on `main`.
 
+## 0.8.0 — 2026-08-20
+
+Agents that are not this machine. `claude -p` in a container is handed an auth token and nothing
+else, writes its transcripts inside the container, and takes them with it when it exits — so by the
+time you want to know what the run cost, the evidence has been deleted.
+
+### Added
+
+- **`CLAUDE_FLEET`, and a fleet of agents to price.** Point it at a directory the containers write
+  into and every agent under it is scanned alongside this machine. An entry is either one agent's
+  `~/.claude` or a directory of them, decided by whether it has a `projects/` inside it, so one
+  variable covers "my one build box" and "where forty containers write" without a second variable to
+  say which you meant. Several entries separate with the platform's path delimiter. A container that
+  did not exist when the server started appears on the next scan, and the watcher watches the fleet
+  directory itself so it does not have to be asked — then keeps watching the new agent, rather than
+  seeing it arrive and missing everything it writes afterwards.
+
+  The collection mechanism is a bind mount, not an agent and not an endpoint:
+
+  ```bash
+  docker run --rm -e ANTHROPIC_API_KEY \
+    -v /srv/agents/build-01/projects:/root/.claude/projects \
+    your-image claude -p "run the release checks"
+
+  CLAUDE_FLEET=/srv/agents npx real-cost-of-agent
+  ```
+
+  Nothing is pushed and there is nothing listening. This server has no authentication because it
+  binds to loopback and reads files; an ingest endpoint would need some, and an unauthenticated local
+  endpoint feeding a money figure is the failure this project exists to avoid. It still makes no
+  outbound request of any kind. See **Agents in containers** in the README for the rest of the rules —
+  mount `projects/` rather than the whole `~/.claude`, so the auth token you passed in stays in the
+  container, and one directory per container, so they cannot read each other's prompts and source.
+
+- **A "By agent" cut**, which is the one the by-project cut cannot be. Every headless container works
+  in `/workspace`, so forty of them collapse into a single project row named `workspace` — correct,
+  since it is one codebase, and useless for the only question a fleet operator has. The cut appears
+  only when there is more than one agent, because a split of one is not a split, and each session row
+  names its agent so several hundred identically-named runs can be told apart.
+
+- **Agents that could not be read are named**, on startup and on `/api/spend`. A container running as
+  root writes root-owned files, and a server that cannot read them otherwise looks exactly like an
+  agent that did no work. A path this refused to follow, or that it has no permission to read, is
+  distinguished from one that is merely empty, because only one of those is a configuration mistake.
+
+  The first version of that distinction drew it off errno — anything that was not `ENOENT` — which is
+  an assertion about the operating system: `readdir` on a path that is a file reports `ENOTDIR` on
+  Linux and `ENOENT` on Windows, so the same fleet entry was a configuration error on one and an
+  empty agent on the other. Windows CI caught it. It now names the two cases that mean the same
+  thing everywhere: a refusal thrown by `scan.js` itself, and the permission codes libuv normalises.
+
+### Fixed
+
+- **Two containers that ran the same session id were one session.** Every container works in the same
+  directory, so every one of them writes to a project directory of the same name, and the map that
+  groups a session's transcripts was keyed by id alone. A repeated id — `--session-id` pinned, or an
+  image with a transcript baked into it — had the second overwrite the first and take its money with
+  it: no row anywhere, under a heading promising a breakdown, with every cut still summing to a total
+  the work had never reached. Grouping is per root now. Found while building the fleet rather than
+  after shipping it, but it is the same failure as the subagent one, so it is written down here too.
+
+### Security
+
+- **A fleet root is untrusted input, and is read as such.** Those directories are written by
+  containers, which makes a path in one attacker-controlled in the way a path off a network request
+  is. What you name in `CLAUDE_FLEET` is yours and may be a symlink into a volume; what is discovered
+  underneath it is taken from the type `readdir` reports, which is false for a symlink — so
+  `projects/x -> /` cannot make the scan walk the host, and `secret.jsonl -> /somewhere/private`
+  cannot be read and priced.
+
+  `projects` itself gets the same treatment in a fleet root, and it is the one that nearly got
+  through. It is the last component of the path `readdir` is called on, and `readdir` follows the last
+  component — so a container handed `<root>` rather than `<root>/projects`, which is the layout people
+  will reach for, could have created `projects` as a symlink to anywhere. The local root still follows
+  it, because that is the user's own home and relocating `~/.claude/projects` to another disk is
+  something people legitimately do.
+
+  Nothing in a fleet root is ever written. All of it is held by
+  [`test/fleet.test.js`](test/fleet.test.js), including that a scan leaves every byte where it was.
+
+- **Agent names cannot reach a post.** `shareFacts` is an allowlist, so `bySource` was excluded the
+  moment it existed rather than needing to be removed — which is the argument for an allowlist over a
+  redaction pass. A container is usually named after the customer, the branch or the internal service
+  it builds, so "which of my agents cost the most" is a sentence about somebody's infrastructure.
+  [`test/share.test.js`](test/share.test.js) now seeds agent names and host paths into every field
+  that has one and asserts none of them appear in any angle, in any tone.
+
+## 0.7.0 — 2026-08-20
+
+Windows and macOS are supported platforms rather than platforms nobody had checked. Three things
+here were quietly POSIX, and each of them was wrong on Windows in the way that is hardest to notice:
+it printed a plausible answer instead of an error.
+
+### Fixed
+
+- **A Windows project directory decoded to a path that exists on no machine.** Claude Code names a
+  project directory after the working directory it ran in, with the separators replaced by dashes —
+  and on Windows the drive's colon goes the same way, so `C:\Users\dev\checkout` is written as
+  `C--Users-dev-checkout`. Read by the POSIX rule, that came back as `C//Users/dev/checkout` and was
+  shown in the by-project cut as if it were where the work happened.
+
+  The decoder now reads the leading `<letter>--` and produces a Windows path. The **name** decides,
+  not the platform doing the reading, so a `~/.claude` copied off a Windows machine — or read from
+  WSL, which is the ordinary case for anyone running both — decodes the same either way.
+
+- **A project's name was its whole path, read across platforms.** `path.basename` knows only the
+  separators of the host it is running on: on Linux a backslash is an ordinary filename character,
+  so `C:\Users\dev\checkout` has no last segment to take and comes back whole. The project column
+  then carried somebody's home directory instead of a project name. Split on both separators now.
+
+- **The preference file went to `~/.config` on Windows.** That is not where a Windows application's
+  per-user settings belong, and it is not a directory OneDrive's profile sync follows — so the one
+  file this app writes was the one file that would not travel with the profile it belonged to. It
+  now goes to `%APPDATA%\real-cost-of-agent\config.json`.
+
+  A plan saved by an older build in the old place is still **read**, and still never written, which
+  is the same rule the rename to this project's name already followed. A reset here would be the
+  quietest kind of harmless bug: the default plan is a *plausible* plan rather than a blank, so the
+  page would keep showing a confident comparison against a subscription the user is not on, with
+  nothing on screen to suggest checking.
+
+- **`web/con` was the console, not a missing file.** Windows resolves a handful of device names in
+  any directory, so a request for `/con` opened the terminal the server was started in and blocked
+  on keyboard input — the request never finished and the user's own typing went to it. `/nul` was
+  worse in the other direction: an empty 200, an asset that does not exist, served. Both are 404s
+  now, on every platform, and what gets read is checked to be a regular file first.
+
+- **The port-busy hint was not a command on Windows.** `PORT=4400 npm start` is shell syntax, not
+  something this program does, and PowerShell does not have it. The hint now names the spelling for
+  the platform it is printing on.
+
+### Added
+
+- **The smoke test is a test.** It used to be a shell block in the CI workflow, which meant the
+  assertions most likely to differ by platform — path containment, how a URL decodes into a
+  filename, whether the access rules are wired into the request path at all — were the ones only
+  ever checked on Linux. [`test/smoke.test.js`](test/smoke.test.js) boots `server/index.js`, asks it
+  for every route, and reads the headers back. It runs in `npm test`, so it runs on every OS in the
+  matrix and on a contributor's own machine.
+
+- **CI runs on Linux, macOS and Windows.** Windows across all three supported Node versions, macOS
+  on one — it shares every path decision with Linux, so what is being checked there is the platform
+  rather than the matrix. The tarball check runs on Windows too, where `npm` and the `bin` shim are
+  both `.cmd` files that do not exist on Linux, and `npx real-cost-of-agent` goes through both.
+
+- **[`test/platform.test.js`](test/platform.test.js)**, which asks every platform's question from
+  whichever platform is running it. `resolveConfigDirs` takes the platform, the environment and the
+  home directory as arguments for exactly that reason: a test that could only run on Windows would
+  not have caught any of the above, because none of it was written on Windows.
+
+- **`.gitattributes`.** `.editorconfig` asks editors for LF endings; this is the half that holds for
+  git. Without it a Windows clone with `core.autocrlf=true` gets CRLF everywhere, which is mostly
+  invisible and twice not: `server/index.js` is the published binary and its shebang stops being one
+  the moment a carriage return lands on the end of it.
+
+### Changed
+
+- The shell block that was CI's `smoke` job is gone, replaced by the test file above. The tarball
+  check moved from a shell block to [`scripts/package-check.mjs`](scripts/package-check.mjs) for the
+  same reason — it now runs where the shims it is checking actually exist.
+
 ## 0.6.0 — 2026-08-19
 
 The first public release. Everything below landed between the last tagged version and going public.

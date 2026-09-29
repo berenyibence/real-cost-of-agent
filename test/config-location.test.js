@@ -1,11 +1,16 @@
 /**
- * Where the preference file lives, across the rename.
+ * Where the preference file lives, across the rename and across platforms.
  *
  * The project used to be called Agent Spend and kept its config under that name.
  * Moving it without a fallback would have been the quietest possible bug: the
  * default plan is a *plausible* plan rather than a blank, so a reset user would
  * keep seeing a confident comparison against a subscription they are not on, and
  * nothing on the page would suggest checking.
+ *
+ * The same reasoning applies to the Windows move from `~/.config` to `%APPDATA%`,
+ * which is why `LEGACY_CONFIG_DIRS` is a list. What each platform answers is in
+ * `test/platform.test.js`, which can ask about all of them from any of them;
+ * this file is about the reading and writing, on whichever one is running it.
  *
  * This file owns the other half of that rule too — that the old location is only
  * ever read. Migrating it on startup would mean this app writing a second file,
@@ -28,11 +33,17 @@ process.env.XDG_CONFIG_HOME = root;
 // telemetry directory.
 process.env.CLAUDE_HOME = await fsp.mkdtemp(path.join(os.tmpdir(), 'rcoa-claude-'));
 
-const { CONFIG_DIR, LEGACY_CONFIG_DIR } = await import('../server/paths.js');
+const { CONFIG_DIR, LEGACY_CONFIG_DIRS } = await import('../server/paths.js');
 const { readConfig, writeConfig } = await import('../server/billing.js');
 
 const CURRENT = path.join(CONFIG_DIR, 'config.json');
-const LEGACY = path.join(LEGACY_CONFIG_DIR, 'config.json');
+// The pre-rename location under the same base, which is the fallback every
+// platform has. Windows has two more when it has not been redirected — for the
+// dotfile directory an older build wrote to — and `XDG_CONFIG_HOME` being set
+// above is what keeps them off this list. See the guard below for why that
+// matters here rather than only in `platform.test.js`.
+const LEGACY_DIR = LEGACY_CONFIG_DIRS[0];
+const LEGACY = path.join(LEGACY_DIR, 'config.json');
 
 const write = (file, body) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -41,13 +52,29 @@ const write = (file, body) => {
 
 const clear = () => {
   fs.rmSync(CONFIG_DIR, { recursive: true, force: true });
-  fs.rmSync(LEGACY_CONFIG_DIR, { recursive: true, force: true });
+  for (const dir of LEGACY_CONFIG_DIRS) fs.rmSync(dir, { recursive: true, force: true });
 };
+
+test('every location this test touches is inside its own temporary directory', () => {
+  /*
+   * A guard on the test rather than on the app, and it is not paranoia: the
+   * fallback list is resolved from the *real* home directory unless something
+   * redirects it, and `clear()` below deletes every directory on it. A change to
+   * `paths.js` that added a home-directory fallback a redirect could not turn off
+   * would make running the suite delete a contributor's own saved plan — on
+   * Windows, where the dotfile fallbacks live, and nowhere else, so nobody
+   * writing the change would see it happen.
+   */
+  for (const dir of [CONFIG_DIR, ...LEGACY_CONFIG_DIRS]) {
+    assert.ok(dir.startsWith(root + path.sep), `${dir} is outside the temporary root`);
+  }
+});
 
 test('the two locations are distinct, and named what the docs say', () => {
   assert.equal(path.basename(CONFIG_DIR), 'real-cost-of-agent');
-  assert.equal(path.basename(LEGACY_CONFIG_DIR), 'agent-spend');
-  assert.notEqual(CONFIG_DIR, LEGACY_CONFIG_DIR);
+  assert.equal(path.basename(LEGACY_DIR), 'agent-spend');
+  const written = LEGACY_CONFIG_DIRS.includes(CONFIG_DIR);
+  assert.equal(written, false, 'the directory that is written is never also read as a legacy one');
   assert.equal(path.dirname(CONFIG_DIR), root, 'XDG_CONFIG_HOME must be honoured');
 });
 

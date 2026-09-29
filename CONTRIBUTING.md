@@ -11,7 +11,7 @@ There is no setup.
 git clone https://github.com/berenyibence/real-cost-of-agent.git
 cd real-cost-of-agent
 node server/index.js     # http://127.0.0.1:4319
-npm test                 # the whole suite, about 100ms
+npm test                 # the whole suite, about a second
 ```
 
 **Do not run `npm install`.** `package.json` has no `dependencies` and no `devDependencies`, and
@@ -24,6 +24,9 @@ Working against someone else's data, or a fixture:
 CLAUDE_HOME=/tmp/fixture-claude npm start
 PORT=4400 npm start
 ```
+
+`VAR=value command` is shell syntax; in PowerShell that is `$env:PORT=4400; npm start`. The app runs
+on Linux, macOS and Windows, and so does the suite.
 
 There is no watcher for the server's own source. Restart it to see a change.
 
@@ -94,14 +97,15 @@ The layering is worth preserving.
 | File                | Owns                                                                |
 | ------------------- | ------------------------------------------------------------------- |
 | `server/index.js`   | routes and static serving. Every route is listed in one `if` chain   |
-| `server/scan.js`    | **everything that knows what a Claude Code transcript looks like** — including that a session spans several files, subagents included |
+| `server/scan.js`    | **everything that knows what a Claude Code transcript looks like** — including that a session spans several files, subagents included, and that an agent may be a container |
 | `server/store.js`   | the cached index, and `withEconomics` — pricing applied to a session |
 | `server/models.js`  | the catalog: rates, context windows, cache multipliers, tiers        |
-| `server/spend.js`   | `spendBreakdown` — one set of dollars split five ways                |
+| `server/spend.js`   | `spendBreakdown` — one set of dollars split six ways                |
 | `server/billing.js` | plans, config sanitising, OAuth-vs-API detection, the comparison     |
 | `web/app.js`        | the page. `h()` builds DOM; `render()` rebuilds it from `state`      |
 | `web/share.js`      | the aggregate allowlist, the post text, the canvas card              |
 | `web/theme.js`      | light or dark before first paint. A file, not an inline block — the CSP forbids one |
+| `server/paths.js`   | where this app's one preference file goes, on each platform, and everywhere an older build may have put it |
 
 Adding a file under `server/` or `web/` means checking `files` in `package.json`: it is an allowlist,
 so anything it does not cover works in your clone and is missing from `npx real-cost-of-agent`. CI's
@@ -171,6 +175,16 @@ of them asserted in `test/share.test.js`:
   claims — and `node --test test/` is the mirror image, working on 20.11 and failing on 24 and
   later. Bare discovery is the only spelling that holds across the whole supported range, and it
   leans on no shell, which matters because CI runs on Windows too.
+
+  Bare discovery also means **every `.js` file under `test/` is run**, not only `*.test.js`. A
+  helper module dropped in there is executed as a test file; put shared fixtures inside the test
+  that needs them.
+- **Anything platform-specific gets a test that can run anywhere.** `resolveConfigDirs` takes the
+  platform, the environment and the home directory as arguments for exactly this reason: the
+  Windows answer is checkable from Linux. A test that only runs on Windows would not have caught
+  either of the bugs that rule exists for, because neither was written on Windows. Where the
+  behaviour genuinely is the platform's — how a URL decodes into a filename, what `web/con` opens —
+  `test/smoke.test.js` boots the server and asks, and CI runs it on all three.
 - Say what you verified by hand. "Ran it against my own `~/.claude`, 300 sessions, totals matched the
   old build to the cent" is the most useful sentence in a review.
 - Screenshots for anything visual, in both themes if you touched colour.
