@@ -818,9 +818,24 @@ async function finishScan(jobs, sources) {
  * not recursively. A container that starts after this does creates a directory
  * that no watch on an existing root can see, and a fleet that only ever
  * notices agents that were already there is a fleet that goes stale silently.
- * Non-recursive because the roots underneath are already covered, and one
+ * Non-recursive because the roots underneath are covered on their own, and one
  * inotify watch per directory of a large fleet is a cost worth not paying
  * twice.
+ *
+ * Covered on their own **as they appear**, which is the half the first version
+ * missed: it listed the roots once, at startup, so an agent that started later
+ * was picked up by the rescan its arrival caused and then never watched — its
+ * figures froze at whatever it had written in its first second. Every change
+ * now re-lists the roots and attaches to whatever is new. A root whose
+ * `projects/` does not exist yet gets a shallow watch on the root itself, so the
+ * moment it is created is seen too, and that watch is dropped once `projects/`
+ * has its own.
+ *
+ * `projects/` is resolved through `projectsDirOf`, the same as `scan` does. A
+ * container can create it as a symlink, and a recursive watch follows one — on
+ * Linux, by walking and watching every directory underneath — so `projects -> /`
+ * would have had this watching the host's whole filesystem while the scan beside
+ * it correctly refused to read a byte of it.
  *
  * Roots are discovered asynchronously, so watchers attach after this returns.
  * `closed` is what makes unsubscribing before that safe — otherwise a server
@@ -829,44 +844,82 @@ async function finishScan(jobs, sources) {
 export function watch(onChange) {
   let timer = null;
   let closed = false;
-  const watchers = [];
+  /** Watched path -> watcher, so a re-list attaches only to what is new. */
+  const watchers = new Map();
 
-  const fire = () => {
-    // Agents write constantly; one burst of appends is one rescan.
-    clearTimeout(timer);
-    timer = setTimeout(onChange, 1_000);
+  const drop = (dir) => {
+    const w = watchers.get(dir);
+    if (!w) return;
+    watchers.delete(dir);
+    try {
+      w.close();
+    } catch {
+      /* already gone */
+    }
   };
 
   const add = (dir, recursive) => {
+    if (closed || watchers.has(dir)) return;
     try {
       const w = fs.watch(dir, { recursive }, fire);
       // A root that goes away — an unmounted volume, a deleted container
-      // directory — must not take the process with it.
-      w.on('error', () => {});
-      if (closed) w.close();
-      else watchers.push(w);
+      // directory — must not take the process with it. Forgotten rather than
+      // kept, so the directory is watched again if it comes back.
+      w.on('error', () => drop(dir));
+      watchers.set(dir, w);
     } catch {
       /* not watchable here; the refresh button still works */
     }
   };
 
-  listRoots()
-    .then((roots) => {
+  const sync = async () => {
+    let roots;
+    try {
+      roots = await listRoots();
+    } catch {
+      return;
+    }
+    for (const root of roots) {
+      let projects = null;
+      try {
+        projects = await projectsDirOf(root);
+        await fsp.access(projects);
+      } catch (err) {
+        // Refused is refused: nothing is watched under a root that the scan
+        // will not read, not even the root, or a planted link would be retried
+        // on every change.
+        if (refusal(err)) continue;
+        projects = null;
+      }
       if (closed) return;
-      for (const root of roots) add(path.join(root.dir, 'projects'), true);
-      for (const dir of fleetDirs()) add(dir, false);
-    })
-    .catch(() => {});
+      if (projects) {
+        add(projects, true);
+        if (watchers.has(projects)) drop(root.dir);
+      } else if (!root.trusted) {
+        // Only fleet roots. The local one is `~/.claude`, which Claude Code
+        // writes to constantly for reasons that have nothing to do with
+        // transcripts, and a machine that has none yet keeps the old answer.
+        add(root.dir, false);
+      }
+    }
+    for (const dir of fleetDirs()) add(dir, false);
+  };
+
+  function fire() {
+    // Agents write constantly; one burst of appends is one rescan, and one
+    // re-list of the roots.
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      onChange();
+      sync();
+    }, 1_000);
+  }
+
+  sync();
 
   return () => {
     closed = true;
     clearTimeout(timer);
-    for (const w of watchers) {
-      try {
-        w.close();
-      } catch {
-        /* already gone */
-      }
-    }
+    for (const dir of [...watchers.keys()]) drop(dir);
   };
 }

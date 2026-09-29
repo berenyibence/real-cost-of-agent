@@ -16,7 +16,8 @@ time you want to know what the run cost, the evidence has been deleted.
   variable covers "my one build box" and "where forty containers write" without a second variable to
   say which you meant. Several entries separate with the platform's path delimiter. A container that
   did not exist when the server started appears on the next scan, and the watcher watches the fleet
-  directory itself so it does not have to be asked.
+  directory itself so it does not have to be asked — then keeps watching the new agent, rather than
+  seeing it arrive and missing everything it writes afterwards.
 
   The collection mechanism is a bind mount, not an agent and not an endpoint:
 

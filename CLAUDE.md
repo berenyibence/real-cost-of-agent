@@ -243,7 +243,10 @@ pre-0.4 flat shape is read as a single period rather than dropped.
 the only place that decides what an agent is — a directory with a `projects/` in it. Everything
 downstream sees one flat list of sessions that each carry a `source`, so a new cut or a new price
 never has to know containers exist. Read the invariant about a fleet root being written by something
-that is not this machine before changing how those directories are walked.
+that is not this machine before changing how those directories are walked — and that includes
+`watch`, which must resolve `projects/` through `projectsDirOf` exactly as `scan` does: a recursive
+watch follows a symlink the scan refused, and on Linux follows it by walking the whole target.
+`test/watch.test.js` holds it.
 
 **A new cut of the data.** Add the bucket in `spendBreakdown` (`server/spend.js`), then a `CUTS`
 entry and a renderer in `web/app.js`. The new bucket must sum to `total` — add it to the loop in

@@ -18,7 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requestAllowed } from './access.js';
 import { getIndex, refresh, startWatching } from './store.js';
-import { CLAUDE_DIR, claudeCodeFound } from './scan.js';
+import { CLAUDE_DIR } from './scan.js';
 import { spendBreakdown } from './spend.js';
 import { compareBilling, detectAuth, PLANS, readConfig, writeConfig } from './billing.js';
 
